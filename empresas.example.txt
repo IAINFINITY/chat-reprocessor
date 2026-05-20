@@ -1,3 +1,0 @@
-# Formato: Nome da Empresa - URL do webhook
-N8N - https://seu-dominio/webhook/n8n-reprocess
-Cliente Exemplo - https://seu-dominio/webhook/cliente-exemplo

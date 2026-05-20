@@ -1,10 +1,13 @@
 import { createChatwootClient } from "./chatwootClient.js";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { extractIdsFromChatUrl } from "./idParser.js";
+import { buildReplayPayload, buildWebhookLikeBody } from "./normalize.js";
 import {
-  buildClientPayload,
   detectReprocessClientByAccountId,
+  detectReprocessClientByAccountName,
   getReprocessClient,
 } from "./reprocessClients.js";
+import { getWebhookHeaderTemplate } from "./webhookResolver.js";
 
 export class ReprocessApiError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -138,7 +141,7 @@ function pickContact(conversation, messagesResponse, latestMessage) {
   return null;
 }
 
-function parseClientSelection(clientInput, accountId) {
+function parseClientSelection(clientInput, accountId, accountName = null) {
   const selectedClient = getReprocessClient(clientInput);
   if (selectedClient) {
     return selectedClient;
@@ -147,7 +150,7 @@ function parseClientSelection(clientInput, accountId) {
   if (clientInput) {
     fail(
       "client_not_configured",
-      `Webhook nao configurado para o cliente '${clientInput}'. Verifique as variaveis de ambiente do backend.`,
+      `Cliente '${clientInput}' nao encontrado no arquivo empresas.json.`,
       400,
     );
   }
@@ -155,6 +158,11 @@ function parseClientSelection(clientInput, accountId) {
   const detectedClient = detectReprocessClientByAccountId(accountId);
   if (detectedClient) {
     return detectedClient;
+  }
+
+  const detectedByName = detectReprocessClientByAccountName(accountName);
+  if (detectedByName) {
+    return detectedByName;
   }
 
   fail(
@@ -182,31 +190,75 @@ function mapChatwootError(error) {
   );
 }
 
-function buildConversationSummary({ conversation, contact, accountId, conversationId, latestUserMessage }) {
-  return {
-    account_id: Number(conversation?.account_id || accountId),
-    conversation_id: Number(conversation?.id || conversationId),
-    inbox_id: Number(conversation?.inbox_id || 0) || null,
-    status: conversation?.status || null,
-    contact: {
-      id: Number(contact?.id || 0) || null,
-      name: contact?.name || "",
-      phone: String(contact?.phone_number || contact?.identifier || ""),
-    },
-    last_user_message: {
-      id: Number(latestUserMessage?.id || 0) || null,
-      created_at: Number(latestUserMessage?.created_at || 0) || null,
-      content: String(latestUserMessage?.content || ""),
-    },
-  };
-}
-
 function getRawConversationUrl(input) {
   return String(input?.conversationUrl || input?.conversation_url || input?.chat_url || "").trim();
 }
 
 function getClientInput(input) {
   return String(input?.client || "").trim().toLowerCase();
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function shouldRetry({ statusCode, networkError }) {
+  if (networkError) {
+    return true;
+  }
+
+  return statusCode === 429 || statusCode >= 500;
+}
+
+function extractCoreMessage(payload) {
+  if (typeof payload?.message === "string") {
+    return payload.message;
+  }
+
+  return String(payload?.messages?.[0]?.content || "");
+}
+
+function extractCoreConversationId(payload) {
+  return Number(payload?.conversation_id || payload?.id || 0) || "";
+}
+
+function extractCoreContactId(payload) {
+  return Number(payload?.contact_id || payload?.meta?.sender?.id || 0) || "";
+}
+
+function buildIdempotencyKey(clientKey, payload) {
+  const hash = createHash("sha256");
+  hash.update(clientKey);
+  hash.update("|");
+  hash.update(String(extractCoreConversationId(payload)));
+  hash.update("|");
+  hash.update(String(extractCoreContactId(payload)));
+  hash.update("|");
+  hash.update(extractCoreMessage(payload));
+  return `reprocess-${hash.digest("hex").slice(0, 32)}`;
+}
+
+function signPayload(payloadText, hmacSecret) {
+  return `sha256=${createHmac("sha256", hmacSecret).update(payloadText).digest("hex")}`;
+}
+
+function logEvent(level, event, details) {
+  const base = {
+    level,
+    event,
+    ts: new Date().toISOString(),
+    ...details,
+  };
+  const line = JSON.stringify(base);
+
+  if (level === "error") {
+    console.error(line);
+    return;
+  }
+
+  console.log(line);
 }
 
 export async function buildReprocessPreview({ input, config }) {
@@ -217,7 +269,7 @@ export async function buildReprocessPreview({ input, config }) {
   }
 
   const { accountId, conversationId } = extractConversationIdentity(conversationUrl, config.chatwootBaseUrl);
-  const selectedClient = parseClientSelection(getClientInput(input), accountId);
+  const selectedClientInput = getClientInput(input);
 
   const chatwootClient = createChatwootClient({
     baseUrl: config.chatwootBaseUrl,
@@ -226,15 +278,23 @@ export async function buildReprocessPreview({ input, config }) {
 
   let conversation;
   let messagesResponse;
+  let profile;
 
   try {
-    [conversation, messagesResponse] = await Promise.all([
+    [conversation, messagesResponse, profile] = await Promise.all([
       chatwootClient.getConversation(accountId, conversationId),
       chatwootClient.getConversationMessages(accountId, conversationId),
+      chatwootClient.getProfile(),
     ]);
   } catch (error) {
     throw mapChatwootError(error);
   }
+
+  const profileAccounts = Array.isArray(profile?.accounts) ? profile.accounts : [];
+  const matchedAccount =
+    profileAccounts.find((account) => Number(account?.id || 0) === Number(accountId)) || null;
+  const accountName = matchedAccount?.name || null;
+  const selectedClient = parseClientSelection(selectedClientInput, accountId, accountName);
 
   const mergedMessages = mergeConversationMessages(conversation, messagesResponse, accountId, conversationId);
   if (mergedMessages.length === 0) {
@@ -255,28 +315,19 @@ export async function buildReprocessPreview({ input, config }) {
   }
 
   const contact = pickContact(conversation, messagesResponse, latestMessage);
-  const payload = buildClientPayload(selectedClient, {
-    clientKey: selectedClient.key,
-    lastUserMessage: latestMessage,
-    contact,
-    conversation,
+  const webhookBody = buildWebhookLikeBody({
+    accountId,
+    conversationId,
+    conversationResponse: conversation,
+    messagesResponse,
+  });
+  const payloadCompleto = buildReplayPayload({
+    body: webhookBody,
+    webhookUrl: selectedClient.webhookUrl,
+    headers: getWebhookHeaderTemplate(),
   });
 
-  return {
-    success: true,
-    client: {
-      key: selectedClient.key,
-      name: selectedClient.name,
-    },
-    payload,
-    conversation: buildConversationSummary({
-      conversation,
-      contact,
-      accountId,
-      conversationId,
-      latestUserMessage: latestMessage,
-    }),
-  };
+  return payloadCompleto;
 }
 
 export async function executeReprocessWebhook({ input }) {
@@ -287,7 +338,7 @@ export async function executeReprocessWebhook({ input }) {
     fail("client_required", "Informe o cliente para executar o reprocessamento.", 400);
   }
 
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  if (!payload || typeof payload !== "object") {
     fail("invalid_payload", "Payload invalido. Gere o preview antes de executar.", 400);
   }
 
@@ -300,42 +351,119 @@ export async function executeReprocessWebhook({ input }) {
     );
   }
 
+  const normalizedPayload = Array.isArray(payload) ? payload[0] : payload;
+  const webhookBody = normalizedPayload?.body || payload;
+  const requestId = randomUUID();
+  const payloadText = JSON.stringify(webhookBody);
+  const idempotencyKey = buildIdempotencyKey(clientKey, webhookBody);
+
   const headers = {
+    ...getWebhookHeaderTemplate(),
     "Content-Type": "application/json",
+    "x-request-id": requestId,
+    "x-idempotency-key": idempotencyKey,
   };
 
   if (clientConfig.webhookSecret) {
     headers[clientConfig.webhookSecretHeader || "x-reprocess-secret"] = clientConfig.webhookSecret;
   }
 
-  let response;
-
-  try {
-    response = await fetch(clientConfig.webhookUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    fail(
-      "webhook_request_error",
-      `Erro ao chamar o webhook: ${error?.message || "falha de rede"}`,
-      502,
+  if (clientConfig.webhookHmacSecret) {
+    headers[clientConfig.webhookHmacHeader || "x-reprocess-signature"] = signPayload(
+      payloadText,
+      clientConfig.webhookHmacSecret,
     );
   }
 
-  if (!response.ok) {
-    const responseText = await response.text();
-    fail(
-      "webhook_request_error",
-      `Webhook respondeu com status ${response.status}. Body: ${responseText || "(vazio)"}`,
-      502,
-    );
+  const maxAttempts = Number(clientConfig.retryCount || 0) + 1;
+  let lastErrorMessage = "Erro nao identificado";
+  let lastStatusCode = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(clientConfig.timeoutMs || 10000));
+
+    try {
+      logEvent("info", "webhook_send_attempt", {
+        request_id: requestId,
+        client: clientKey,
+        attempt,
+        max_attempts: maxAttempts,
+        timeout_ms: Number(clientConfig.timeoutMs || 10000),
+        conversation_id: extractCoreConversationId(webhookBody) || null,
+        contact_id: extractCoreContactId(webhookBody) || null,
+      });
+
+      const response = await fetch(clientConfig.webhookUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(webhookBody),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        logEvent("info", "webhook_send_success", {
+          request_id: requestId,
+          client: clientKey,
+          attempt,
+          status_code: response.status,
+          conversation_id: extractCoreConversationId(webhookBody) || null,
+          contact_id: extractCoreContactId(webhookBody) || null,
+        });
+
+        return {
+          success: true,
+          message: "Reprocessamento enviado com sucesso.",
+          request_id: requestId,
+          idempotency_key: idempotencyKey,
+        };
+      }
+
+      const responseText = await response.text();
+      lastStatusCode = response.status;
+      lastErrorMessage = `Webhook respondeu com status ${response.status}. Body: ${responseText || "(vazio)"}`;
+
+      logEvent("error", "webhook_send_failed_response", {
+        request_id: requestId,
+        client: clientKey,
+        attempt,
+        status_code: response.status,
+        response_body: responseText || "",
+      });
+
+      if (!shouldRetry({ statusCode: response.status, networkError: false }) || attempt >= maxAttempts) {
+        break;
+      }
+    } catch (error) {
+      clearTimeout(timeout);
+
+      const isAbort = error?.name === "AbortError";
+      lastErrorMessage = isAbort
+        ? `Timeout ao chamar webhook apos ${Number(clientConfig.timeoutMs || 10000)}ms`
+        : `Erro ao chamar o webhook: ${error?.message || "falha de rede"}`;
+
+      logEvent("error", "webhook_send_failed_network", {
+        request_id: requestId,
+        client: clientKey,
+        attempt,
+        is_timeout: isAbort,
+        error_message: error?.message || "erro de rede",
+      });
+
+      if (!shouldRetry({ statusCode: null, networkError: true }) || attempt >= maxAttempts) {
+        break;
+      }
+    }
+
+    const backoffMs = attempt * 500;
+    await wait(backoffMs);
   }
 
-  return {
-    success: true,
-    message: "Reprocessamento enviado com sucesso.",
-  };
+  fail(
+    "webhook_request_error",
+    `${lastErrorMessage} (request_id=${requestId}${lastStatusCode ? `, status=${lastStatusCode}` : ""})`,
+    502,
+  );
 }
-

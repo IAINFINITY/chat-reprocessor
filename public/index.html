@@ -249,15 +249,16 @@
       }
 
       function fillSummary(data) {
-        const conversation = data?.conversation || {};
-        const contact = conversation?.contact || {};
-        const last = conversation?.last_user_message || {};
+        const item = Array.isArray(data) ? data[0] : null;
+        const body = item?.body || {};
+        const sender = body?.meta?.sender || body?.messages?.[0]?.sender || {};
+        const lastMessage = body?.messages?.[0]?.content || "-";
 
-        sAccountEl.textContent = conversation?.account_id ?? "-";
-        sConversationEl.textContent = conversation?.conversation_id ?? "-";
-        sContactEl.textContent = contact?.name || "-";
-        sPhoneEl.textContent = contact?.phone || "-";
-        sMessageEl.textContent = last?.content || "-";
+        sAccountEl.textContent = body?.messages?.[0]?.account_id ?? "-";
+        sConversationEl.textContent = body?.id ?? "-";
+        sContactEl.textContent = sender?.name || "-";
+        sPhoneEl.textContent = sender?.phone_number || "-";
+        sMessageEl.textContent = lastMessage;
       }
 
       function resetPreviewState() {
@@ -321,14 +322,27 @@
           const data = await response.json();
           outputEl.textContent = JSON.stringify(data, null, 2);
 
-          if (!response.ok || !data?.success) {
+          if (!response.ok || !Array.isArray(data) || data.length === 0) {
             throw new Error(data?.message || "Falha ao gerar preview.");
           }
 
-          previewPayload = data.payload;
-          previewClientKey = data.client?.key || selectedClient;
-          resolvedClientEl.value = data.client?.name
-            ? `${data.client.name} (${data.client.key})`
+          previewPayload = data;
+          previewClientKey = selectedClient;
+
+          if (!previewClientKey) {
+            const payloadWebhookUrl = String(data?.[0]?.webhookUrl || "").trim().toLowerCase();
+            const matchedClient =
+              clients.find((client) => {
+                const clientWebhookUrl = String(client?.webhook_url || "").trim().toLowerCase();
+                return clientWebhookUrl && payloadWebhookUrl && clientWebhookUrl === payloadWebhookUrl;
+              }) || null;
+
+            previewClientKey = matchedClient?.key || "";
+          }
+
+          const selectedClientMeta = clients.find((client) => client.key === previewClientKey) || null;
+          resolvedClientEl.value = selectedClientMeta
+            ? `${selectedClientMeta.name} (${selectedClientMeta.key})`
             : previewClientKey || "-";
 
           fillSummary(data);

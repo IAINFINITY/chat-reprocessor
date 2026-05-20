@@ -1,11 +1,43 @@
+import { listWebhookMappings } from "./webhookResolver.js";
+
 const DEFAULT_SOURCE = "manual_reprocess";
 const DEFAULT_SECRET_HEADER = "x-reprocess-secret";
+const DEFAULT_HMAC_HEADER = "x-reprocess-signature";
 
 function normalizeClientKey(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
+    .replace(/\s+/g, "-")
     .replace(/[^a-z0-9_-]/g, "");
+}
+
+function maybeRepairMojibake(value) {
+  const text = String(value || "");
+
+  if (!/[ÃÂ]/.test(text)) {
+    return text;
+  }
+
+  try {
+    return Buffer.from(text, "latin1").toString("utf8");
+  } catch {
+    return text;
+  }
+}
+
+function normalizeClientName(value) {
+  return maybeRepairMojibake(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function toEnvKey(clientKey) {
+  return String(clientKey || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "_");
 }
 
 function parseCsv(rawValue) {
@@ -19,6 +51,15 @@ function parseCsvInteger(rawValue) {
   return parseCsv(rawValue)
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function parsePositiveInteger(rawValue, fallbackValue) {
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return fallbackValue;
+  }
+
+  return parsed;
 }
 
 function buildBasePayload({ clientKey, lastUserMessage, contact, conversation }) {
@@ -37,37 +78,35 @@ function buildDefaultPayload(context) {
   return buildBasePayload(context);
 }
 
-function buildN8nPayload(context) {
-  return buildBasePayload(context);
-}
-
 const payloadBuilders = {
   default: buildDefaultPayload,
-  n8n: buildN8nPayload,
 };
 
-function parseClientsConfigFromEnv(env = process.env) {
-  const configuredKeys = parseCsv(env.REPROCESS_CLIENTS).map(normalizeClientKey).filter(Boolean);
+function getClientsRegistry(env = process.env) {
+  const mappings = listWebhookMappings();
   const clients = {};
 
-  for (const clientKey of configuredKeys) {
-    const upperKey = clientKey.toUpperCase();
-    const envPrefix = `CLIENT_${upperKey}_`;
-    const webhookUrl = String(env[`${envPrefix}REPROCESS_WEBHOOK`] || "").trim();
-
-    if (!webhookUrl) {
+  for (const mapping of mappings) {
+    const key = normalizeClientKey(mapping.nome);
+    if (!key) {
       continue;
     }
 
-    const builderKey = normalizeClientKey(env[`${envPrefix}PAYLOAD_BUILDER`] || clientKey) || "default";
+    const envKey = toEnvKey(key);
+    const envPrefix = `CLIENT_${envKey}_`;
+    const builderKey = normalizeClientKey(env[`${envPrefix}PAYLOAD_BUILDER`] || "default") || "default";
     const payloadBuilder = payloadBuilders[builderKey] || payloadBuilders.default;
 
-    clients[clientKey] = {
-      key: clientKey,
-      name: String(env[`${envPrefix}NAME`] || upperKey).trim(),
-      webhookUrl,
+    clients[key] = {
+      key,
+      name: mapping.nome,
+      webhookUrl: mapping.webhookUrl,
       webhookSecret: String(env[`${envPrefix}WEBHOOK_SECRET`] || "").trim(),
       webhookSecretHeader: String(env[`${envPrefix}WEBHOOK_SECRET_HEADER`] || DEFAULT_SECRET_HEADER).trim(),
+      webhookHmacSecret: String(env[`${envPrefix}WEBHOOK_HMAC_SECRET`] || "").trim(),
+      webhookHmacHeader: String(env[`${envPrefix}WEBHOOK_HMAC_HEADER`] || DEFAULT_HMAC_HEADER).trim(),
+      timeoutMs: parsePositiveInteger(env[`${envPrefix}TIMEOUT_MS`], 10000),
+      retryCount: parsePositiveInteger(env[`${envPrefix}RETRY_COUNT`], 2),
       chatwootAccountIds: parseCsvInteger(env[`${envPrefix}CHATWOOT_ACCOUNT_IDS`]),
       payloadBuilder,
     };
@@ -76,14 +115,11 @@ function parseClientsConfigFromEnv(env = process.env) {
   return clients;
 }
 
-function getClientRegistry() {
-  return parseClientsConfigFromEnv();
-}
-
 export function listReprocessClients() {
-  return Object.values(getClientRegistry()).map((client) => ({
+  return Object.values(getClientsRegistry()).map((client) => ({
     key: client.key,
     name: client.name,
+    webhook_url: client.webhookUrl,
     chatwoot_account_ids: client.chatwootAccountIds,
     webhook_configured: Boolean(client.webhookUrl),
   }));
@@ -91,24 +127,35 @@ export function listReprocessClients() {
 
 export function getReprocessClient(clientKey) {
   const normalized = normalizeClientKey(clientKey);
-
   if (!normalized) {
     return null;
   }
 
-  return getClientRegistry()[normalized] || null;
+  return getClientsRegistry()[normalized] || null;
 }
 
 export function detectReprocessClientByAccountId(accountId) {
   const numericAccountId = Number(accountId || 0);
-
   if (!Number.isInteger(numericAccountId) || numericAccountId <= 0) {
     return null;
   }
 
   return (
-    Object.values(getClientRegistry()).find((client) => client.chatwootAccountIds.includes(numericAccountId)) ||
+    Object.values(getClientsRegistry()).find((client) => client.chatwootAccountIds.includes(numericAccountId)) ||
     null
+  );
+}
+
+export function detectReprocessClientByAccountName(accountName) {
+  const normalizedName = normalizeClientName(accountName);
+  if (!normalizedName) {
+    return null;
+  }
+
+  return (
+    Object.values(getClientsRegistry()).find(
+      (client) => normalizeClientName(client.name) === normalizedName,
+    ) || null
   );
 }
 

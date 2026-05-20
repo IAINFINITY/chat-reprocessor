@@ -1,4 +1,4 @@
-﻿import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const HEADER_TEMPLATE = {
@@ -42,30 +42,27 @@ function normalizeName(value) {
     .toLowerCase();
 }
 
-function readWebhooksTextFile() {
-  const filePath = path.resolve(process.cwd(), "empresas.txt");
+function readWebhooksJsonFile() {
+  const filePath = path.resolve(process.cwd(), "empresas.json");
 
   if (!existsSync(filePath)) {
-    throw new Error("Arquivo empresas.txt nao encontrado na raiz do projeto.");
+    throw new Error("Arquivo empresas.json nao encontrado na raiz do projeto.");
   }
 
-  const content = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let parsed;
+  try {
+    const content = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error("Arquivo empresas.json invalido. Verifique o formato JSON.");
+  }
 
+  const empresas = Array.isArray(parsed?.empresas) ? parsed.empresas : [];
   const mappings = [];
 
-  for (const line of lines) {
-    if (line.startsWith("#")) {
-      continue;
-    }
-
-    const parts = line.split(/\s-\s/);
-    if (parts.length < 2) {
-      continue;
-    }
-
-    const nome = parts[0].trim();
-    const webhookUrl = parts.slice(1).join(" - ").trim();
+  for (const empresa of empresas) {
+    const nome = String(empresa?.nome || "").trim();
+    const webhookUrl = String(empresa?.url_webhook || "").trim();
 
     if (!nome || !webhookUrl) {
       continue;
@@ -82,7 +79,7 @@ function readWebhooksTextFile() {
 }
 
 export function listWebhookMappings() {
-  return readWebhooksTextFile().map((item) => ({
+  return readWebhooksJsonFile().map((item) => ({
     nome: item.nome,
     webhookUrl: item.webhookUrl,
   }));
@@ -94,7 +91,7 @@ export function findWebhookMappingByAccountName(accountName) {
     return null;
   }
 
-  const mappings = readWebhooksTextFile();
+  const mappings = readWebhooksJsonFile();
   return mappings.find((item) => item.nome_normalizado === normalized) || null;
 }
 
@@ -103,7 +100,7 @@ export function resolveWebhookConfigByAccountName(accountName) {
 
   if (!found) {
     throw new Error(
-      `Nao existe webhook mapeado para a conta '${accountName}' no arquivo empresas.txt.`,
+      `Nao existe webhook mapeado para a conta '${accountName}' no arquivo empresas.json.`,
     );
   }
 
@@ -113,4 +110,8 @@ export function resolveWebhookConfigByAccountName(accountName) {
     headersTemplate: { ...HEADER_TEMPLATE },
     headersMode: "template",
   };
+}
+
+export function getWebhookHeaderTemplate() {
+  return { ...HEADER_TEMPLATE };
 }
