@@ -1,0 +1,8 @@
+{
+  "empresas": [
+    {
+      "nome": "N8N",
+      "url_webhook": "https://seu-dominio/webhook/n8n-reprocess"
+    }
+  ]
+}

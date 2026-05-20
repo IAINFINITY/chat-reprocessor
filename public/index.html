@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chatwoot Reprocess Helper</title>
+    <style>
+      :root {
+        --bg: #eef3f8;
+        --card: #ffffff;
+        --line: #ced8e6;
+        --text: #1b2738;
+        --muted: #5f6f85;
+        --primary: #0f7a63;
+        --primary-hover: #0d6b58;
+        --danger: #8a2f2f;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(circle at 10% 0%, #f7fbff 0%, var(--bg) 40%, #e8eef6 100%);
+        color: var(--text);
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      .container {
+        max-width: 980px;
+        margin: 32px auto;
+        padding: 0 16px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 1.4rem;
+      }
+
+      p {
+        margin: 0 0 18px;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .field.full {
+        grid-column: 1 / -1;
+      }
+
+      label {
+        font-weight: 600;
+      }
+
+      input,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px 12px;
+        font-size: 0.95rem;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      button {
+        border: none;
+        border-radius: 8px;
+        padding: 11px 14px;
+        font-weight: 700;
+        cursor: pointer;
+        background: var(--primary);
+        color: #fff;
+      }
+
+      button.secondary {
+        background: #225184;
+      }
+
+      button.secondary:disabled {
+        background: #8aa0bc;
+      }
+
+      button:hover {
+        background: var(--primary-hover);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.8;
+      }
+
+      .status {
+        margin-top: 12px;
+        font-size: 0.92rem;
+        color: var(--muted);
+      }
+
+      .status.error {
+        color: var(--danger);
+      }
+
+      .summary {
+        margin-top: 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        background: #f9fbff;
+      }
+
+      .summary h2 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+      }
+
+      .summary-item {
+        margin: 4px 0;
+        font-size: 0.92rem;
+      }
+
+      .summary-item strong {
+        display: inline-block;
+        min-width: 165px;
+      }
+
+      pre {
+        margin-top: 14px;
+        background: #101924;
+        color: #d9e8ff;
+        border-radius: 10px;
+        border: 1px solid #0b121b;
+        padding: 14px;
+        overflow: auto;
+        max-height: 58vh;
+        font-size: 0.84rem;
+      }
+
+      @media (max-width: 780px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .actions {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <section class="card">
+        <h1>Reprocessamento Manual Chatwoot</h1>
+        <p>Cole o link, gere o JSON de preview e so depois execute o reprocessamento.</p>
+
+        <div class="grid">
+          <div class="field full">
+            <label for="conversationUrl">Link da conversa</label>
+            <input
+              id="conversationUrl"
+              type="url"
+              placeholder="https://chat.seudominio.com/app/accounts/12/conversations/7544"
+            />
+          </div>
+
+          <div class="field">
+            <label for="clientSelect">Cliente/empresa</label>
+            <select id="clientSelect">
+              <option value="">Detectar automaticamente</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="resolvedClient">Cliente resolvido</label>
+            <input id="resolvedClient" type="text" value="-" disabled />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="previewBtn" type="button">Gerar JSON (Preview)</button>
+          <button id="executeBtn" class="secondary" type="button" disabled>Reprocessar</button>
+        </div>
+
+        <div class="status" id="status">Carregando clientes configurados no backend...</div>
+
+        <section class="summary">
+          <h2>Resumo da conversa</h2>
+          <div class="summary-item"><strong>Account ID:</strong> <span id="sAccount">-</span></div>
+          <div class="summary-item"><strong>Conversa ID:</strong> <span id="sConversation">-</span></div>
+          <div class="summary-item"><strong>Contato:</strong> <span id="sContact">-</span></div>
+          <div class="summary-item"><strong>Telefone:</strong> <span id="sPhone">-</span></div>
+          <div class="summary-item"><strong>Ultima msg usuario:</strong> <span id="sMessage">-</span></div>
+        </section>
+
+        <pre id="output">{}</pre>
+      </section>
+    </main>
+
+    <script>
+      const conversationUrlEl = document.getElementById("conversationUrl");
+      const clientSelectEl = document.getElementById("clientSelect");
+      const resolvedClientEl = document.getElementById("resolvedClient");
+      const previewBtnEl = document.getElementById("previewBtn");
+      const executeBtnEl = document.getElementById("executeBtn");
+      const statusEl = document.getElementById("status");
+      const outputEl = document.getElementById("output");
+      const sAccountEl = document.getElementById("sAccount");
+      const sConversationEl = document.getElementById("sConversation");
+      const sContactEl = document.getElementById("sContact");
+      const sPhoneEl = document.getElementById("sPhone");
+      const sMessageEl = document.getElementById("sMessage");
+
+      let clients = [];
+      let previewPayload = null;
+      let previewClientKey = "";
+
+      function setStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.classList.toggle("error", Boolean(isError));
+      }
+
+      function resetSummary() {
+        sAccountEl.textContent = "-";
+        sConversationEl.textContent = "-";
+        sContactEl.textContent = "-";
+        sPhoneEl.textContent = "-";
+        sMessageEl.textContent = "-";
+      }
+
+      function fillSummary(data) {
+        const conversation = data?.conversation || {};
+        const contact = conversation?.contact || {};
+        const last = conversation?.last_user_message || {};
+
+        sAccountEl.textContent = conversation?.account_id ?? "-";
+        sConversationEl.textContent = conversation?.conversation_id ?? "-";
+        sContactEl.textContent = contact?.name || "-";
+        sPhoneEl.textContent = contact?.phone || "-";
+        sMessageEl.textContent = last?.content || "-";
+      }
+
+      function resetPreviewState() {
+        previewPayload = null;
+        previewClientKey = "";
+        resolvedClientEl.value = "-";
+        executeBtnEl.disabled = true;
+        outputEl.textContent = "{}";
+        resetSummary();
+      }
+
+      async function loadClients() {
+        try {
+          const response = await fetch("/api/reprocess/clients");
+          const data = await response.json();
+
+          if (!response.ok || !data?.success) {
+            throw new Error(data?.message || "Falha ao carregar clientes.");
+          }
+
+          clients = Array.isArray(data.clients) ? data.clients : [];
+          clientSelectEl.innerHTML = '<option value="">Detectar automaticamente</option>';
+
+          for (const client of clients) {
+            const option = document.createElement("option");
+            option.value = client.key;
+            option.textContent = `${client.name} (${client.key})`;
+            clientSelectEl.appendChild(option);
+          }
+
+          setStatus("Pronto. Gere o preview para revisar o JSON.");
+        } catch (error) {
+          setStatus(`Erro ao carregar clientes: ${error.message}`, true);
+          previewBtnEl.disabled = true;
+        }
+      }
+
+      async function generatePreview() {
+        const conversationUrl = conversationUrlEl.value.trim();
+        const selectedClient = clientSelectEl.value.trim();
+
+        if (!conversationUrl) {
+          setStatus("Informe o link da conversa.", true);
+          return;
+        }
+
+        resetPreviewState();
+        previewBtnEl.disabled = true;
+        setStatus("Gerando preview no backend...");
+
+        try {
+          const response = await fetch("/api/reprocess/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversationUrl,
+              client: selectedClient || undefined,
+            }),
+          });
+
+          const data = await response.json();
+          outputEl.textContent = JSON.stringify(data, null, 2);
+
+          if (!response.ok || !data?.success) {
+            throw new Error(data?.message || "Falha ao gerar preview.");
+          }
+
+          previewPayload = data.payload;
+          previewClientKey = data.client?.key || selectedClient;
+          resolvedClientEl.value = data.client?.name
+            ? `${data.client.name} (${data.client.key})`
+            : previewClientKey || "-";
+
+          fillSummary(data);
+          executeBtnEl.disabled = !previewPayload || !previewClientKey;
+          setStatus("Preview gerado com sucesso. Revise o JSON e clique em Reprocessar.");
+        } catch (error) {
+          setStatus(error.message, true);
+        } finally {
+          previewBtnEl.disabled = false;
+        }
+      }
+
+      async function executeReprocess() {
+        if (!previewPayload || !previewClientKey) {
+          setStatus("Gere o preview antes de executar o reprocessamento.", true);
+          return;
+        }
+
+        executeBtnEl.disabled = true;
+        setStatus("Enviando payload para o webhook...");
+
+        try {
+          const response = await fetch("/api/reprocess/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              client: previewClientKey,
+              payload: previewPayload,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok || !data?.success) {
+            throw new Error(data?.message || "Falha ao executar reprocessamento.");
+          }
+
+          setStatus(data.message || "Reprocessamento enviado com sucesso.");
+        } catch (error) {
+          setStatus(error.message, true);
+        } finally {
+          executeBtnEl.disabled = false;
+        }
+      }
+
+      conversationUrlEl.addEventListener("input", () => {
+        resetPreviewState();
+      });
+      clientSelectEl.addEventListener("change", () => {
+        resetPreviewState();
+      });
+      previewBtnEl.addEventListener("click", generatePreview);
+      executeBtnEl.addEventListener("click", executeReprocess);
+
+      loadClients();
+    </script>
+  </body>
+</html>
