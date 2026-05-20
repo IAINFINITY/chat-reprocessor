@@ -2,12 +2,14 @@ import { createChatwootClient } from "./chatwootClient.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { extractIdsFromChatUrl } from "./idParser.js";
 import { buildReplayPayload, buildWebhookLikeBody } from "./normalize.js";
+import { createOpenAiClient } from "./openaiClient.js";
 import {
   detectReprocessClientByAccountId,
   detectReprocessClientByAccountName,
   getReprocessClient,
 } from "./reprocessClients.js";
 import { getWebhookHeaderTemplate } from "./webhookResolver.js";
+import { buildMergedUserText } from "./messageEnricher.js";
 
 export class ReprocessApiError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -116,6 +118,23 @@ function pickLatestMessage(messages) {
   return sorted[0];
 }
 
+function pickLatestUserMessage(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return null;
+  }
+
+  const sorted = [...messages].sort((left, right) => {
+    const byCreatedAt = Number(right?.created_at || 0) - Number(left?.created_at || 0);
+    if (byCreatedAt !== 0) {
+      return byCreatedAt;
+    }
+
+    return Number(right?.id || 0) - Number(left?.id || 0);
+  });
+
+  return sorted.find((message) => isUserMessage(message)) || null;
+}
+
 function pickContact(conversation, messagesResponse, latestMessage) {
   if (conversation?.meta?.sender) {
     return conversation.meta.sender;
@@ -198,6 +217,16 @@ function getClientInput(input) {
   return String(input?.client || "").trim().toLowerCase();
 }
 
+function getMessageCountInput(input) {
+  const raw = Number(input?.messageCount ?? input?.message_count ?? 1);
+
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 1;
+  }
+
+  return Math.min(Math.floor(raw), 20);
+}
+
 function wait(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -270,6 +299,7 @@ export async function buildReprocessPreview({ input, config }) {
 
   const { accountId, conversationId } = extractConversationIdentity(conversationUrl, config.chatwootBaseUrl);
   const selectedClientInput = getClientInput(input);
+  const messageCount = getMessageCountInput(input);
 
   const chatwootClient = createChatwootClient({
     baseUrl: config.chatwootBaseUrl,
@@ -306,20 +336,31 @@ export async function buildReprocessPreview({ input, config }) {
     fail("no_messages_found", "Nenhuma mensagem encontrada para essa conversa.", 404);
   }
 
-  if (!isUserMessage(latestMessage)) {
+  const latestUserMessage = pickLatestUserMessage(mergedMessages);
+  if (!latestUserMessage) {
     fail(
       "last_message_not_user",
-      "A ultima mensagem da conversa nao foi enviada pelo usuario.",
+      "Nao foi encontrada mensagem enviada pelo usuario nessa conversa.",
       422,
     );
   }
 
-  const contact = pickContact(conversation, messagesResponse, latestMessage);
+  const contact = pickContact(conversation, messagesResponse, latestUserMessage);
+  const openaiClient = createOpenAiClient(config);
+  const mergedUserText = await buildMergedUserText({
+    allMessages: mergedMessages,
+    messageCount,
+    openaiClient,
+    config,
+    chatwootApiToken: config.chatwootApiToken,
+  });
   const webhookBody = buildWebhookLikeBody({
     accountId,
     conversationId,
     conversationResponse: conversation,
     messagesResponse,
+    messageCount,
+    mergedUserText,
   });
   const payloadCompleto = buildReplayPayload({
     body: webhookBody,
@@ -358,8 +399,8 @@ export async function executeReprocessWebhook({ input }) {
   const idempotencyKey = buildIdempotencyKey(clientKey, webhookBody);
 
   const headers = {
-    ...getWebhookHeaderTemplate(),
     "Content-Type": "application/json",
+    Accept: "application/json",
     "x-request-id": requestId,
     "x-idempotency-key": idempotencyKey,
   };
@@ -449,6 +490,9 @@ export async function executeReprocessWebhook({ input }) {
         client: clientKey,
         attempt,
         is_timeout: isAbort,
+        error_name: error?.name || null,
+        error_code: error?.code || error?.cause?.code || null,
+        error_cause: error?.cause?.message || null,
         error_message: error?.message || "erro de rede",
       });
 
@@ -466,4 +510,71 @@ export async function executeReprocessWebhook({ input }) {
     `${lastErrorMessage} (request_id=${requestId}${lastStatusCode ? `, status=${lastStatusCode}` : ""})`,
     502,
   );
+}
+
+export async function testWebhookConnection({ input }) {
+  const clientKey = getClientInput(input);
+
+  if (!clientKey) {
+    fail("client_required", "Informe o cliente para testar conexao.", 400);
+  }
+
+  const clientConfig = getReprocessClient(clientKey);
+  if (!clientConfig || !clientConfig.webhookUrl) {
+    fail(
+      "webhook_not_configured",
+      `Webhook nao configurado para o cliente '${clientKey}'.`,
+      400,
+    );
+  }
+
+  const requestId = randomUUID();
+  const timeoutMs = Number(clientConfig.timeoutMs || 10000);
+  const method = String(input?.method || "POST").toUpperCase();
+  const safeMethod = ["HEAD", "OPTIONS", "GET", "POST"].includes(method) ? method : "POST";
+
+  const headers = {
+    "x-request-id": requestId,
+    "x-connection-test": "true",
+  };
+
+  if (clientConfig.webhookSecret) {
+    headers[clientConfig.webhookSecretHeader || "x-reprocess-secret"] = clientConfig.webhookSecret;
+  }
+
+  const controller = new AbortController();
+  const start = Date.now();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(clientConfig.webhookUrl, {
+      method: safeMethod,
+      headers,
+      body: safeMethod === "POST" ? "{}" : undefined,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    return {
+      success: true,
+      message: "Conexao com webhook testada.",
+      request_id: requestId,
+      client: clientKey,
+      method: safeMethod,
+      status_code: response.status,
+      ok: response.ok,
+      latency_ms: Date.now() - start,
+    };
+  } catch (error) {
+    clearTimeout(timer);
+    const isTimeout = error?.name === "AbortError";
+
+    fail(
+      "webhook_connection_test_failed",
+      isTimeout
+        ? `Timeout no teste de conexao apos ${timeoutMs}ms`
+        : `Falha no teste de conexao: ${error?.message || "erro de rede"}`,
+      502,
+    );
+  }
 }

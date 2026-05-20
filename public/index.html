@@ -195,6 +195,11 @@
             <label for="resolvedClient">Cliente resolvido</label>
             <input id="resolvedClient" type="text" value="-" disabled />
           </div>
+
+          <div class="field">
+            <label for="messageCount">Qtd. mensagens do usuario</label>
+            <input id="messageCount" type="number" min="1" max="20" step="1" value="1" />
+          </div>
         </div>
 
         <div class="actions">
@@ -230,6 +235,7 @@
       const sContactEl = document.getElementById("sContact");
       const sPhoneEl = document.getElementById("sPhone");
       const sMessageEl = document.getElementById("sMessage");
+      const messageCountEl = document.getElementById("messageCount");
 
       let clients = [];
       let previewPayload = null;
@@ -299,6 +305,7 @@
       async function generatePreview() {
         const conversationUrl = conversationUrlEl.value.trim();
         const selectedClient = clientSelectEl.value.trim();
+        const messageCount = Number(messageCountEl.value || 1);
 
         if (!conversationUrl) {
           setStatus("Informe o link da conversa.", true);
@@ -316,6 +323,7 @@
             body: JSON.stringify({
               conversationUrl,
               client: selectedClient || undefined,
+              messageCount,
             }),
           });
 

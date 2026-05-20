@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 import { createChatwootClient } from "./chatwootClient.js";
 import { assertRequiredConfig, getConfig, loadEnvFile } from "./config.js";
 import { resolveConversationIdentity } from "./idParser.js";
-import { buildReprocessPreview, executeReprocessWebhook, ReprocessApiError } from "./reprocessApi.js";
+import {
+  buildReprocessPreview,
+  executeReprocessWebhook,
+  ReprocessApiError,
+  testWebhookConnection,
+} from "./reprocessApi.js";
 import { listReprocessClients } from "./reprocessClients.js";
 import { reprocessConversation } from "./reprocessConversation.js";
 import { findWebhookMappingByAccountName } from "./webhookResolver.js";
@@ -199,6 +204,17 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  if (req.method === "POST" && req.url === "/api/reprocess/test-connection") {
+    try {
+      const input = await readJsonBody(req);
+      const result = await testWebhookConnection({ input });
+      return json(res, 200, result);
+    } catch (error) {
+      const formatted = toApiErrorResponse(error);
+      return json(res, formatted.statusCode, formatted.body);
+    }
+  }
+
   if (req.method === "POST" && req.url === "/reprocess") {
     try {
       const input = await readJsonBody(req);
@@ -215,7 +231,7 @@ const server = createServer(async (req, res) => {
   return json(res, 404, {
     error: "not_found",
     message:
-      "Use GET /, GET /empresas, GET /health, GET /api/reprocess/clients, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /empresas, GET /health, GET /api/reprocess/clients, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /conversation-context ou POST /reprocess",
   });
 });
 

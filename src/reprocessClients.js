@@ -62,6 +62,14 @@ function parsePositiveInteger(rawValue, fallbackValue) {
   return parsed;
 }
 
+function parseGlobalTimeoutMs(env = process.env) {
+  return parsePositiveInteger(env.REPROCESS_WEBHOOK_TIMEOUT_MS, 30000);
+}
+
+function parseGlobalRetryCount(env = process.env) {
+  return parsePositiveInteger(env.REPROCESS_WEBHOOK_RETRY_COUNT, 2);
+}
+
 function buildBasePayload({ clientKey, lastUserMessage, contact, conversation }) {
   return {
     message: String(lastUserMessage?.content || ""),
@@ -83,6 +91,8 @@ const payloadBuilders = {
 };
 
 function getClientsRegistry(env = process.env) {
+  const globalTimeoutMs = parseGlobalTimeoutMs(env);
+  const globalRetryCount = parseGlobalRetryCount(env);
   const mappings = listWebhookMappings();
   const clients = {};
 
@@ -105,8 +115,8 @@ function getClientsRegistry(env = process.env) {
       webhookSecretHeader: String(env[`${envPrefix}WEBHOOK_SECRET_HEADER`] || DEFAULT_SECRET_HEADER).trim(),
       webhookHmacSecret: String(env[`${envPrefix}WEBHOOK_HMAC_SECRET`] || "").trim(),
       webhookHmacHeader: String(env[`${envPrefix}WEBHOOK_HMAC_HEADER`] || DEFAULT_HMAC_HEADER).trim(),
-      timeoutMs: parsePositiveInteger(env[`${envPrefix}TIMEOUT_MS`], 10000),
-      retryCount: parsePositiveInteger(env[`${envPrefix}RETRY_COUNT`], 2),
+      timeoutMs: parsePositiveInteger(env[`${envPrefix}TIMEOUT_MS`], globalTimeoutMs),
+      retryCount: parsePositiveInteger(env[`${envPrefix}RETRY_COUNT`], globalRetryCount),
       chatwootAccountIds: parseCsvInteger(env[`${envPrefix}CHATWOOT_ACCOUNT_IDS`]),
       payloadBuilder,
     };

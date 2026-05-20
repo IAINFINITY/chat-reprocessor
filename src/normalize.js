@@ -109,6 +109,28 @@ function pickLatestCustomerMessage(messages) {
   return sorted[0]?.content || "";
 }
 
+function pickRecentCustomerMessages(messages, count) {
+  const customerMessages = messages.filter(isCustomerMessage);
+  if (customerMessages.length === 0) {
+    return [];
+  }
+
+  const sortedByNewest = [...customerMessages].sort((a, b) => {
+    const left = Number(a?.created_at || 0);
+    const right = Number(b?.created_at || 0);
+
+    if (right !== left) {
+      return right - left;
+    }
+
+    return Number(b?.id || 0) - Number(a?.id || 0);
+  });
+
+  const normalizedCount = Number.isInteger(count) && count > 0 ? count : 1;
+
+  return sortedByNewest.slice(0, normalizedCount).reverse();
+}
+
 function normalizeSenderShape(sender) {
   if (!sender) {
     return null;
@@ -170,9 +192,32 @@ export function buildMainVariables({ accountId, conversationId, conversationResp
   };
 }
 
-export function buildWebhookLikeBody({ accountId, conversationId, conversationResponse, messagesResponse }) {
+export function buildWebhookLikeBody({
+  accountId,
+  conversationId,
+  conversationResponse,
+  messagesResponse,
+  messageCount = 1,
+  mergedUserText = "",
+}) {
   const allMessages = mergeMessages(conversationResponse, messagesResponse, accountId, conversationId);
-  const eventMessage = pickEventMessage(conversationResponse, allMessages, accountId, conversationId);
+  const eventMessageBase = pickEventMessage(conversationResponse, allMessages, accountId, conversationId);
+  const recentCustomerMessages = pickRecentCustomerMessages(allMessages, messageCount);
+  const mergedCustomerContent = recentCustomerMessages
+    .map((message) => String(message?.content || "").trim())
+    .filter(Boolean)
+    .join("\n");
+
+  const finalContent = String(mergedUserText || mergedCustomerContent || "").trim();
+  const eventMessage =
+    eventMessageBase && finalContent
+      ? {
+          ...eventMessageBase,
+          content: finalContent,
+          processed_message_content: finalContent,
+        }
+      : eventMessageBase;
+
   const messages = eventMessage ? [eventMessage] : [];
   const contact = pickContactFromConversation(conversationResponse, messagesResponse);
   const meta = conversationResponse?.meta || {};

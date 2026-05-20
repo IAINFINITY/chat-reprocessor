@@ -1,6 +1,8 @@
-﻿import { createChatwootClient } from "./chatwootClient.js";
+import { createChatwootClient } from "./chatwootClient.js";
 import { buildMainVariables, buildWebhookLikeBody, buildReplayPayload } from "./normalize.js";
 import { resolveConversationIdentity } from "./idParser.js";
+import { buildMergedUserText } from "./messageEnricher.js";
+import { createOpenAiClient } from "./openaiClient.js";
 import { resolveWebhookConfigByAccountName } from "./webhookResolver.js";
 
 function getAccountFromProfile(profile, accountId) {
@@ -40,11 +42,27 @@ export async function reprocessConversation({ input, config }) {
     accountName,
   };
 
+  const mergedMessages = [
+    ...(Array.isArray(conversationResponse?.messages) ? conversationResponse.messages : []),
+    ...(Array.isArray(messagesResponse?.payload) ? messagesResponse.payload : []),
+  ];
+  const openaiClient = createOpenAiClient(config);
+  const messageCount = Number(input?.messageCount ?? input?.message_count ?? 1);
+  const mergedUserText = await buildMergedUserText({
+    allMessages: mergedMessages,
+    messageCount,
+    openaiClient,
+    config,
+    chatwootApiToken: config.chatwootApiToken,
+  });
+
   const webhookBody = buildWebhookLikeBody({
     accountId: identity.accountId,
     conversationId: identity.conversationId,
     conversationResponse,
     messagesResponse,
+    messageCount,
+    mergedUserText,
   });
 
   const payloadCompleto = buildReplayPayload({
@@ -81,3 +99,4 @@ export async function reprocessConversation({ input, config }) {
 
   return payloadCompleto;
 }
+

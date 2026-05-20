@@ -8,6 +8,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js"
   },
+  "dependencies": {
+    "openai": "^4.104.0"
+  },
   "engines": {
     "node": ">=18"
   }
