@@ -1,4 +1,4 @@
-﻿import { readFileSync } from "node:fs";
+﻿import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,25 @@ assertRequiredConfig(config);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const indexHtmlPath = path.resolve(__dirname, "..", "public", "index.html");
+const publicDirPath = path.resolve(__dirname, "..", "public");
+const indexHtmlPath = path.resolve(publicDirPath, "index.html");
+const STATIC_CONTENT_TYPES = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".map": "application/json; charset=utf-8",
+};
 
 function toApiErrorResponse(error) {
   if (error instanceof ReprocessApiError) {
@@ -73,6 +91,59 @@ function html(res, statusCode, content) {
   });
 
   res.end(content);
+}
+
+function getStaticContentType(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  return STATIC_CONTENT_TYPES[extension] || "application/octet-stream";
+}
+
+function tryServeStaticAsset(req, res, pathname) {
+  if (req.method !== "GET" || pathname === "/") {
+    return false;
+  }
+
+  let decodedPathname = pathname;
+  try {
+    decodedPathname = decodeURIComponent(pathname);
+  } catch {
+    return false;
+  }
+
+  const relativePath = decodedPathname.replace(/^\/+/, "");
+  if (!relativePath || relativePath.includes("\0")) {
+    return false;
+  }
+
+  const absolutePath = path.resolve(publicDirPath, relativePath);
+  const publicPrefix = `${publicDirPath}${path.sep}`;
+  if (!absolutePath.startsWith(publicPrefix)) {
+    return false;
+  }
+
+  if (!existsSync(absolutePath)) {
+    return false;
+  }
+
+  let stats;
+  try {
+    stats = statSync(absolutePath);
+  } catch {
+    return false;
+  }
+
+  if (!stats.isFile()) {
+    return false;
+  }
+
+  const buffer = readFileSync(absolutePath);
+  res.writeHead(200, {
+    "Content-Type": getStaticContentType(absolutePath),
+    "Content-Length": buffer.length,
+    "Cache-Control": "no-store",
+  });
+  res.end(buffer);
+  return true;
 }
 
 function getRequestUrl(req) {
@@ -177,6 +248,10 @@ function mapProfileAccounts(profile) {
 const server = createServer(async (req, res) => {
   const requestUrl = getRequestUrl(req);
   const pathname = requestUrl.pathname;
+
+  if (tryServeStaticAsset(req, res, pathname)) {
+    return;
+  }
 
   if (req.method === "GET" && pathname === "/") {
     try {

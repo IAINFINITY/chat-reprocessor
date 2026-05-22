@@ -28,3 +28,7 @@ Thumbs.db
 Desktop.ini
 .idea/
 .vscode/
+
+# Others
+brand-spec.md
+reprocessador-dashboard.html
