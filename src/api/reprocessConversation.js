@@ -1,9 +1,9 @@
-import { createChatwootClient } from "./chatwootClient.js";
-import { buildMainVariables, buildWebhookLikeBody, buildReplayPayload } from "./normalize.js";
-import { resolveConversationIdentity } from "./idParser.js";
-import { buildMergedUserText } from "./messageEnricher.js";
-import { createOpenAiClient } from "./openaiClient.js";
-import { resolveWebhookConfigByAccountName } from "./webhookResolver.js";
+﻿import { createChatwootClient } from "../clients/chatwootClient.js";
+import { buildMainVariables, buildWebhookLikeBody, buildReplayPayload } from "../domain/normalize.js";
+import { resolveConversationIdentity } from "../domain/idParser.js";
+import { buildMergedUserText } from "../services/messageEnricher.js";
+import { createOpenAiClient } from "../clients/openaiClient.js";
+import { resolveWebhookConfigByAccountName } from "../domain/webhookResolver.js";
 
 function getAccountFromProfile(profile, accountId) {
   const accounts = Array.isArray(profile?.accounts) ? profile.accounts : [];
@@ -99,4 +99,5 @@ export async function reprocessConversation({ input, config }) {
 
   return payloadCompleto;
 }
+
 

@@ -1,0 +1,169 @@
+﻿<!doctype html>
+<html lang="pt-BR" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reprocessador - IA Infinity</title>
+    <link rel="stylesheet" href="/assets/css/reprocessador-dashboard.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-header-left">
+        <span class="logo-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M3 4h10M3 8h8M3 12h6" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <h1>Reprocessador</h1>
+        <span class="badge">v2.0</span>
+      </div>
+      <div class="header-actions">
+        <button class="theme-toggle" id="themeToggle" aria-label="Alternar tema">
+          <span id="themeIcon"></span>
+        </button>
+      </div>
+    </header>
+
+    <div class="page-body">
+      <div class="main-col">
+        <div class="stats-row" id="statsRow">
+          <div class="stat-card anim-card-stats success">
+            <div class="stat-label">Reprocessados</div>
+            <div class="stat-value" id="statSuccess">--</div>
+            <div class="stat-sub">sem dados</div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card anim-card-stats error">
+            <div class="stat-label">Com erro</div>
+            <div class="stat-value" id="statErrors">--</div>
+            <div class="stat-sub">sem dados</div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card anim-card-stats accent">
+            <div class="stat-label">Pendentes</div>
+            <div class="stat-value" id="statPending">--</div>
+            <div class="stat-sub">sem dados</div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card anim-card-stats">
+            <div class="stat-label">Clientes ativos</div>
+            <div class="stat-value" id="statClients">--</div>
+            <div class="stat-sub">sem dados</div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <section class="card anim-card" id="inputCard">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Nova operação</span>
+          </div>
+          <div class="form-grid">
+            <div class="field full">
+              <label for="conversationUrl">Link da conversa</label>
+              <input id="conversationUrl" type="url" placeholder="https://chat.seudominio.com/app/accounts/12/conversations/7544" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="field">
+              <label for="clientSelect">Cliente / empresa</label>
+              <select id="clientSelect">
+                <option value="">Detectar automaticamente</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="resolvedClient">Cliente resolvido</label>
+              <input id="resolvedClient" type="text" value="-" disabled />
+            </div>
+            <div class="field">
+              <label for="messageCount">Qtd. de mensagens</label>
+              <input id="messageCount" type="number" min="1" max="20" step="1" value="1" />
+            </div>
+          </div>
+          <div class="actions-row">
+            <button id="previewBtn" class="btn btn-primary">Gerar JSON</button>
+            <button id="executeBtn" class="btn btn-secondary" disabled>Reprocessar</button>
+          </div>
+          <div class="status-bar" id="statusBar">
+            <span class="status-dot"></span>
+            <span id="statusText">Carregando clientes...</span>
+          </div>
+        </section>
+
+        <section class="card anim-card" id="summarySection">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Resumo da conversa</span>
+            <span id="summaryBadge" style="font-size:.72rem;padding:3px 10px;border-radius:20px;background:var(--success-soft);color:var(--success);font-weight:500">-</span>
+          </div>
+          <table class="summary-table">
+            <tr><td>Account ID</td><td class="mono" id="sAccount">-</td></tr>
+            <tr><td>Conversa ID</td><td class="mono" id="sConversation">-</td></tr>
+            <tr><td>Contato</td><td class="accent" id="sContact">-</td></tr>
+            <tr><td>Telefone</td><td class="mono" id="sPhone">-</td></tr>
+            <tr><td>Última mensagem</td><td id="sMessage">-</td></tr>
+            <tr><td>Recebida em</td><td id="sReceived">-</td></tr>
+            <tr><td>Cliente detectado</td><td class="accent" id="sDetected">-</td></tr>
+            <tr><td>Webhook destino</td><td class="mono" id="sWebhook" style="font-size:.8rem">-</td></tr>
+          </table>
+        </section>
+
+        <section class="card anim-card" id="previewSection">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>JSON de reprocessamento</span>
+            <button class="card-action" id="copyBtn">Copiar JSON</button>
+          </div>
+          <div class="json-block">
+            <pre id="output">{}</pre>
+          </div>
+        </section>
+
+        <section class="card anim-card" id="historySection">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Histórico local</span>
+            <span class="card-action" id="refreshHistory" style="cursor:pointer">Atualizar</span>
+          </div>
+          <div class="table-wrap">
+            <table class="history">
+              <thead>
+                <tr>
+                  <th>#</th><th>Conversa</th><th>Cliente</th><th>Status</th><th>Data</th><th>Duração</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="historyPagination"></div>
+        </section>
+
+        <section class="diagnostic-panel" id="diagnosticPanel">
+          <div class="diag-header">Diagnóstico</div>
+          <div class="diag-grid">
+            <div class="diag-item"><span class="lbl">Código</span><span class="val" id="dCode">-</span></div>
+            <div class="diag-item"><span class="lbl">Título</span><span class="val" id="dTitle">-</span></div>
+            <div class="diag-item"><span class="lbl">Causa</span><span class="val" id="dCause">-</span></div>
+            <div class="diag-item"><span class="lbl">Sugestão</span><span class="val" id="dSuggestion">-</span></div>
+            <div class="diag-item"><span class="lbl">Request ID</span><span class="val mono" id="dRequest">-</span></div>
+            <div class="diag-item"><span class="lbl">Fluxo n8n</span><span class="val" id="dWorkflow">-</span></div>
+            <div class="diag-item"><span class="lbl">Nó com erro</span><span class="val" id="dNode">-</span></div>
+            <div class="diag-item"><span class="lbl">Execução</span><span class="val" id="dExecution">-</span></div>
+            <div class="diag-item full"><span class="lbl">Mensagem do fluxo</span><span class="val" id="dFlowMessage">-</span></div>
+            <div class="diag-item full"><span class="lbl">Upstream</span><span class="val" id="dUpstream">-</span></div>
+          </div>
+          <div class="actions-row" style="margin-top:14px">
+            <button id="n8nLookupBtn" class="btn btn-ghost btn-sm" disabled>Buscar status no fluxo</button>
+            <button id="clearDiagnosticBtn" class="btn btn-ghost btn-sm">Limpar</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="side-col">
+        <section class="card anim-side">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Atividade</span>
+          </div>
+          <div class="activity-feed" id="activityFeed"></div>
+        </section>
+      </div>
+    </div>
+
+    <script defer src="/assets/js/theme-toggle.js"></script>
+    <script defer src="/assets/js/reprocessador-dashboard.js"></script>
+  </body>
+</html>

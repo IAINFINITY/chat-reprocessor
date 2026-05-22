@@ -2,26 +2,26 @@
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createChatwootClient } from "./chatwootClient.js";
-import { assertRequiredConfig, getConfig, loadEnvFile } from "./config.js";
-import { resolveConversationIdentity } from "./idParser.js";
+import { createChatwootClient } from "../clients/chatwootClient.js";
+import { assertRequiredConfig, getConfig, loadEnvFile } from "../config/config.js";
+import { resolveConversationIdentity } from "../domain/idParser.js";
 import {
   buildReprocessPreview,
   executeReprocessWebhook,
   ReprocessApiError,
   testWebhookConnection,
-} from "./reprocessApi.js";
+} from "../api/reprocessApi.js";
 import {
   getLatestN8nErrorEvent,
   getLatestN8nStatusEvent,
   registerN8nErrorEvent,
   registerN8nStatusEvent,
-} from "./n8nErrorStore.js";
-import { getReprocessClient, listReprocessClients } from "./reprocessClients.js";
-import { reprocessConversation } from "./reprocessConversation.js";
-import { listSupabaseExposedTables } from "./supabaseClient.js";
-import { findWebhookMappingByAccountName } from "./webhookResolver.js";
-import { inspectPauseConfigForClient } from "./pauseChecker.js";
+} from "../stores/n8nErrorStore.js";
+import { getReprocessClient, listReprocessClients } from "../domain/reprocessClients.js";
+import { reprocessConversation } from "../api/reprocessConversation.js";
+import { listSupabaseExposedTables } from "../clients/supabaseClient.js";
+import { findWebhookMappingByAccountName } from "../domain/webhookResolver.js";
+import { inspectPauseConfigForClient } from "../services/pauseChecker.js";
 
 loadEnvFile();
 
@@ -30,8 +30,9 @@ assertRequiredConfig(config);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const publicDirPath = path.resolve(__dirname, "..", "public");
-const indexHtmlPath = path.resolve(publicDirPath, "index.html");
+const publicDirPath = path.resolve(__dirname, "..", "..", "public");
+const indexHtmlPath = path.resolve(publicDirPath, "pages", "index.html");
+const reprocessadorHtmlPath = path.resolve(publicDirPath, "pages", "reprocessador.html");
 const STATIC_CONTENT_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -260,7 +261,19 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 500, {
         error: "index_unavailable",
-        message: "Nao foi possivel carregar public/index.html",
+        message: "Nao foi possivel carregar public/pages/index.html",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/reprocessador") {
+    try {
+      const content = readFileSync(reprocessadorHtmlPath, "utf8");
+      return html(res, 200, content);
+    } catch {
+      return json(res, 500, {
+        error: "reprocessador_unavailable",
+        message: "Nao foi possivel carregar public/pages/reprocessador.html",
       });
     }
   }
@@ -578,10 +591,11 @@ const server = createServer(async (req, res) => {
   return json(res, 404, {
     error: "not_found",
     message:
-      "Use GET /, GET /empresas, GET /health, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /reprocessador, GET /empresas, GET /health, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, POST /conversation-context ou POST /reprocess",
   });
 });
 
 server.listen(config.port, () => {
   console.log(`Chatwoot Reprocess Helper online em http://localhost:${config.port}`);
 });
+

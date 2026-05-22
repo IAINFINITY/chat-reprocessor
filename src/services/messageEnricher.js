@@ -1,4 +1,4 @@
-import { loadPromptFile } from "./promptLoader.js";
+﻿import { loadPromptFile } from "./promptLoader.js";
 import { toFile } from "openai/uploads";
 
 const DEFAULT_AUDIO_PROMPT =
@@ -241,3 +241,4 @@ export async function buildMergedUserText({
 
   return parts.join("\n").trim();
 }
+

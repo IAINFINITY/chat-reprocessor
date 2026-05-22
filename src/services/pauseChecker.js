@@ -1,10 +1,10 @@
-import {
+﻿import {
   createSupabaseAdminClient,
   describeSupabaseTable,
   inspectSupabaseTableSampleColumns,
   listSupabaseExposedTables,
   probeSupabaseTableColumns,
-} from "./supabaseClient.js";
+} from "../clients/supabaseClient.js";
 
 const IGNORED_NAME_TOKENS = new Set([
   "e",
@@ -33,7 +33,7 @@ const DEFAULT_FLAG_PROBE_COLUMNS = [
 function maybeRepairMojibake(value) {
   const text = String(value || "");
 
-  if (!/[ÃƒÃ‚]/.test(text)) {
+  if (!/[\u00C3\u00C2]/.test(text)) {
     return text;
   }
 
@@ -666,3 +666,4 @@ export async function inspectPauseConfigForClient({
     fallback_message: tableInspection?.fallback_message || null,
   };
 }
+

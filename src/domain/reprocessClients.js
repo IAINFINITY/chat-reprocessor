@@ -1,4 +1,4 @@
-import { listWebhookMappings } from "./webhookResolver.js";
+﻿import { listWebhookMappings } from "./webhookResolver.js";
 
 const DEFAULT_SOURCE = "manual_reprocess";
 const DEFAULT_SECRET_HEADER = "x-reprocess-secret";
@@ -15,7 +15,7 @@ function normalizeClientKey(value) {
 function maybeRepairMojibake(value) {
   const text = String(value || "");
 
-  if (!/[ÃÂ]/.test(text)) {
+  if (!/[\u00C3\u00C2]/.test(text)) {
     return text;
   }
 
@@ -117,7 +117,7 @@ function parseBoolean(rawValue, fallbackValue) {
     return true;
   }
 
-  if (["0", "false", "no", "nao", "não"].includes(normalized)) {
+  if (["0", "false", "no", "nao"].includes(normalized)) {
     return false;
   }
 
@@ -262,3 +262,4 @@ export function detectReprocessClientByAccountName(accountName) {
 export function buildClientPayload(clientConfig, context) {
   return clientConfig.payloadBuilder(context);
 }
+

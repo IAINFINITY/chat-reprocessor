@@ -1,16 +1,16 @@
-import { createChatwootClient } from "./chatwootClient.js";
+﻿import { createChatwootClient } from "../clients/chatwootClient.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { extractIdsFromChatUrl } from "./idParser.js";
-import { buildReplayPayload, buildWebhookLikeBody } from "./normalize.js";
-import { createOpenAiClient } from "./openaiClient.js";
+import { extractIdsFromChatUrl } from "../domain/idParser.js";
+import { buildReplayPayload, buildWebhookLikeBody } from "../domain/normalize.js";
+import { createOpenAiClient } from "../clients/openaiClient.js";
 import {
   detectReprocessClientByAccountId,
   detectReprocessClientByAccountName,
   getReprocessClient,
-} from "./reprocessClients.js";
-import { getWebhookHeaderTemplate } from "./webhookResolver.js";
-import { buildMergedUserText } from "./messageEnricher.js";
-import { checkClientPauseStatus } from "./pauseChecker.js";
+} from "../domain/reprocessClients.js";
+import { getWebhookHeaderTemplate } from "../domain/webhookResolver.js";
+import { buildMergedUserText } from "../services/messageEnricher.js";
+import { checkClientPauseStatus } from "../services/pauseChecker.js";
 
 export class ReprocessApiError extends Error {
   constructor(code, message, statusCode = 400, details = null) {
@@ -866,3 +866,4 @@ export async function testWebhookConnection({ input }) {
     );
   }
 }
+

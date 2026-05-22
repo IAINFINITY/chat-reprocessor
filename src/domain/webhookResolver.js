@@ -22,7 +22,7 @@ const HEADER_TEMPLATE = {
 function maybeRepairMojibake(value) {
   const text = String(value || "");
 
-  if (!/[ÃÂ]/.test(text)) {
+  if (!/[\u00C3\u00C2]/.test(text)) {
     return text;
   }
 
