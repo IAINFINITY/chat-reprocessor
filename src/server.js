@@ -11,9 +11,17 @@ import {
   ReprocessApiError,
   testWebhookConnection,
 } from "./reprocessApi.js";
-import { listReprocessClients } from "./reprocessClients.js";
+import {
+  getLatestN8nErrorEvent,
+  getLatestN8nStatusEvent,
+  registerN8nErrorEvent,
+  registerN8nStatusEvent,
+} from "./n8nErrorStore.js";
+import { getReprocessClient, listReprocessClients } from "./reprocessClients.js";
 import { reprocessConversation } from "./reprocessConversation.js";
+import { listSupabaseExposedTables } from "./supabaseClient.js";
 import { findWebhookMappingByAccountName } from "./webhookResolver.js";
+import { inspectPauseConfigForClient } from "./pauseChecker.js";
 
 loadEnvFile();
 
@@ -32,6 +40,7 @@ function toApiErrorResponse(error) {
         success: false,
         error: error.code,
         message: error.message,
+        details: error.details || null,
       },
     };
   }
@@ -66,6 +75,12 @@ function html(res, statusCode, content) {
   res.end(content);
 }
 
+function getRequestUrl(req) {
+  const host = req.headers.host || "localhost";
+  const rawPath = req.url || "/";
+  return new URL(rawPath, `http://${host}`);
+}
+
 async function readJsonBody(req) {
   const chunks = [];
 
@@ -84,6 +99,61 @@ async function readJsonBody(req) {
   } catch {
     throw new Error("Body JSON invalido.");
   }
+}
+
+function extractConversationIdFromExecuteInput(input) {
+  const normalizedPayload = Array.isArray(input?.payload) ? input.payload[0] : input?.payload;
+  const webhookBody = normalizedPayload?.body || normalizedPayload || {};
+  return String(webhookBody?.conversation_id || webhookBody?.id || "").trim();
+}
+
+function enrichApiErrorWithN8nEvent(apiBody, fallback = {}) {
+  if (!apiBody || typeof apiBody !== "object") {
+    return;
+  }
+
+  if (apiBody.details?.n8n_event) {
+    return;
+  }
+
+  const details = apiBody.details || {};
+  const requestId = String(details.request_id || fallback.requestId || "").trim();
+  const client = String(details.client || fallback.client || "").trim().toLowerCase();
+  const conversationId = String(fallback.conversationId || "").trim();
+
+  if (!requestId && !client && !conversationId) {
+    return;
+  }
+
+  const event = getLatestN8nErrorEvent({
+    requestId,
+    client,
+    conversationId,
+  });
+
+  if (!event) {
+    return;
+  }
+
+  apiBody.details = {
+    ...details,
+    n8n_event: event,
+  };
+}
+
+function validateN8nCallbackSecret(req, config) {
+  const expectedSecret = String(config.n8nErrorCallbackSecret || "").trim();
+  if (!expectedSecret) {
+    return true;
+  }
+
+  const headerName = String(config.n8nErrorCallbackHeader || "x-n8n-error-secret")
+    .trim()
+    .toLowerCase();
+  const rawValue = req.headers[headerName];
+  const receivedSecret = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+
+  return String(receivedSecret || "").trim() === expectedSecret;
 }
 
 function mapProfileAccounts(profile) {
@@ -105,7 +175,10 @@ function mapProfileAccounts(profile) {
 }
 
 const server = createServer(async (req, res) => {
-  if (req.method === "GET" && req.url === "/") {
+  const requestUrl = getRequestUrl(req);
+  const pathname = requestUrl.pathname;
+
+  if (req.method === "GET" && pathname === "/") {
     try {
       const content = readFileSync(indexHtmlPath, "utf8");
       return html(res, 200, content);
@@ -117,7 +190,7 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "GET" && req.url === "/empresas") {
+  if (req.method === "GET" && pathname === "/empresas") {
     try {
       const client = createChatwootClient({
         baseUrl: config.chatwootBaseUrl,
@@ -134,7 +207,7 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "POST" && req.url === "/conversation-context") {
+  if (req.method === "POST" && pathname === "/conversation-context") {
     try {
       const input = await readJsonBody(req);
       const identity = resolveConversationIdentity(input, config.chatwootBaseUrl);
@@ -171,18 +244,106 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "GET" && req.url === "/health") {
+  if (req.method === "GET" && pathname === "/health") {
     return json(res, 200, { ok: true, service: "chatwoot-reprocess-helper" });
   }
 
-  if (req.method === "GET" && req.url === "/api/reprocess/clients") {
+  if (req.method === "GET" && pathname === "/api/reprocess/clients") {
     return json(res, 200, {
       success: true,
       clients: listReprocessClients(),
     });
   }
 
-  if (req.method === "POST" && req.url === "/api/reprocess/preview") {
+  if (req.method === "GET" && pathname === "/api/reprocess/supabase/tables") {
+    try {
+      const schema = requestUrl.searchParams.get("schema") || "public";
+      const result = await listSupabaseExposedTables(config, schema);
+
+      if (!result.ok) {
+        return json(res, 400, {
+          success: false,
+          error: result.error,
+          message: result.message,
+          details: {
+            status_code: result.status_code || null,
+            response_excerpt: result.response_excerpt || null,
+          },
+        });
+      }
+
+      return json(res, 200, {
+        success: true,
+        schema: result.schema,
+        total: result.total,
+        tables: result.tables,
+      });
+    } catch (error) {
+      return json(res, 502, {
+        success: false,
+        error: "supabase_list_tables_failed",
+        message: error?.message || "Falha ao consultar metadados do Supabase.",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/supabase/pause-mappings") {
+    try {
+      const clientFilter = String(requestUrl.searchParams.get("client") || "")
+        .trim()
+        .toLowerCase();
+      const allClients = listReprocessClients();
+      const targetClients = clientFilter
+        ? allClients.filter((client) => String(client.key || "").toLowerCase() === clientFilter)
+        : allClients;
+
+      if (clientFilter && targetClients.length === 0) {
+        return json(res, 404, {
+          success: false,
+          error: "client_not_found",
+          message: `Cliente '${clientFilter}' nao encontrado.`,
+        });
+      }
+
+      const mappings = await Promise.all(
+        targetClients.map(async (clientSummary) => {
+          const clientConfig = getReprocessClient(clientSummary.key);
+          if (!clientConfig) {
+            return {
+              client: clientSummary.key,
+              name: clientSummary.name,
+              pause_table: null,
+              source: "unavailable",
+              reason: "client_config_not_found",
+              pause_schema: "public",
+              pause_table_suffix: "pausar",
+              pause_lookup_columns: [],
+            };
+          }
+
+          const inspected = await inspectPauseConfigForClient({
+            clientConfig,
+            config,
+          });
+          return inspected;
+        }),
+      );
+
+      return json(res, 200, {
+        success: true,
+        total: mappings.length,
+        mappings,
+      });
+    } catch (error) {
+      return json(res, 502, {
+        success: false,
+        error: "supabase_pause_mapping_failed",
+        message: error?.message || "Falha ao resolver tabelas de pausa por cliente.",
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/preview") {
     try {
       const input = await readJsonBody(req);
       const preview = await buildReprocessPreview({ input, config });
@@ -193,18 +354,27 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "POST" && req.url === "/api/reprocess/execute") {
+  if (req.method === "POST" && pathname === "/api/reprocess/execute") {
+    let input = {};
+
     try {
-      const input = await readJsonBody(req);
-      const result = await executeReprocessWebhook({ input });
+      input = await readJsonBody(req);
+      const result = await executeReprocessWebhook({ input, config });
       return json(res, 200, result);
     } catch (error) {
       const formatted = toApiErrorResponse(error);
+      enrichApiErrorWithN8nEvent(formatted.body, {
+        requestId: String(formatted.body?.details?.request_id || "").trim(),
+        client: String(formatted.body?.details?.client || input?.client || "")
+          .trim()
+          .toLowerCase(),
+        conversationId: extractConversationIdFromExecuteInput(input),
+      });
       return json(res, formatted.statusCode, formatted.body);
     }
   }
 
-  if (req.method === "POST" && req.url === "/api/reprocess/test-connection") {
+  if (req.method === "POST" && pathname === "/api/reprocess/test-connection") {
     try {
       const input = await readJsonBody(req);
       const result = await testWebhookConnection({ input });
@@ -215,7 +385,109 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "POST" && req.url === "/reprocess") {
+  if (req.method === "POST" && pathname === "/api/reprocess/n8n/error-callback") {
+    if (!validateN8nCallbackSecret(req, config)) {
+      return json(res, 401, {
+        success: false,
+        error: "unauthorized_n8n_callback",
+        message: "Callback n8n sem segredo valido.",
+      });
+    }
+
+    try {
+      const input = await readJsonBody(req);
+      const hintedClient = String(requestUrl.searchParams.get("client") || "")
+        .trim()
+        .toLowerCase();
+      const normalizedInput =
+        hintedClient && input && typeof input === "object" && !Array.isArray(input)
+          ? { ...input, client: input.client || hintedClient }
+          : input;
+      const event = registerN8nErrorEvent(normalizedInput);
+
+      return json(res, 200, {
+        success: true,
+        message: "Evento de erro n8n recebido.",
+        event,
+      });
+    } catch (error) {
+      return json(res, 400, {
+        success: false,
+        error: "invalid_n8n_callback_payload",
+        message: error?.message || "Payload invalido para callback de erro n8n.",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/n8n/errors/latest") {
+    const client = requestUrl.searchParams.get("client") || "";
+    const requestId = requestUrl.searchParams.get("request_id") || "";
+    const conversationId = requestUrl.searchParams.get("conversation_id") || "";
+    const event = getLatestN8nErrorEvent({
+      client,
+      requestId,
+      conversationId,
+    });
+
+    return json(res, 200, {
+      success: true,
+      found: Boolean(event),
+      event: event || null,
+    });
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/n8n/status-callback") {
+    if (!validateN8nCallbackSecret(req, config)) {
+      return json(res, 401, {
+        success: false,
+        error: "unauthorized_n8n_callback",
+        message: "Callback n8n sem segredo valido.",
+      });
+    }
+
+    try {
+      const input = await readJsonBody(req);
+      const hintedClient = String(requestUrl.searchParams.get("client") || "")
+        .trim()
+        .toLowerCase();
+      const normalizedInput =
+        hintedClient && input && typeof input === "object" && !Array.isArray(input)
+          ? { ...input, client: input.client || hintedClient }
+          : input;
+      const event = registerN8nStatusEvent(normalizedInput);
+
+      return json(res, 200, {
+        success: true,
+        message: "Evento de status n8n recebido.",
+        event,
+      });
+    } catch (error) {
+      return json(res, 400, {
+        success: false,
+        error: "invalid_n8n_callback_payload",
+        message: error?.message || "Payload invalido para callback de status n8n.",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/n8n/status/latest") {
+    const client = requestUrl.searchParams.get("client") || "";
+    const requestId = requestUrl.searchParams.get("request_id") || "";
+    const conversationId = requestUrl.searchParams.get("conversation_id") || "";
+    const event = getLatestN8nStatusEvent({
+      client,
+      requestId,
+      conversationId,
+    });
+
+    return json(res, 200, {
+      success: true,
+      found: Boolean(event),
+      event: event || null,
+    });
+  }
+
+  if (req.method === "POST" && pathname === "/reprocess") {
     try {
       const input = await readJsonBody(req);
       const output = await reprocessConversation({ input, config });
@@ -231,7 +503,7 @@ const server = createServer(async (req, res) => {
   return json(res, 404, {
     error: "not_found",
     message:
-      "Use GET /, GET /empresas, GET /health, GET /api/reprocess/clients, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /empresas, GET /health, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, POST /conversation-context ou POST /reprocess",
   });
 });
 

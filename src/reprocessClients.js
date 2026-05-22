@@ -47,6 +47,10 @@ function parseCsv(rawValue) {
     .filter(Boolean);
 }
 
+function parseCsvLower(rawValue) {
+  return parseCsv(rawValue).map((value) => value.toLowerCase());
+}
+
 function parseCsvInteger(rawValue) {
   return parseCsv(rawValue)
     .map((value) => Number(value))
@@ -68,6 +72,66 @@ function parseGlobalTimeoutMs(env = process.env) {
 
 function parseGlobalRetryCount(env = process.env) {
   return parsePositiveInteger(env.REPROCESS_WEBHOOK_RETRY_COUNT, 2);
+}
+
+function parsePauseDefaultSchema(env = process.env) {
+  return String(env.REPROCESS_PAUSE_DEFAULT_SCHEMA || "public").trim();
+}
+
+function buildLookupColumns(rawLookupColumns, legacyLookupColumn, fallbackColumns) {
+  const configured = parseCsvLower(rawLookupColumns);
+  const legacy = String(legacyLookupColumn || "")
+    .trim()
+    .toLowerCase();
+  const fallback = Array.isArray(fallbackColumns) ? fallbackColumns : [];
+
+  return [...new Set([...configured, legacy, ...fallback].filter(Boolean))];
+}
+
+function parsePauseDefaultLookupColumns(env = process.env) {
+  const fallback = [
+    "telefone",
+    "phone",
+    "phone_number",
+    "numero",
+    "whatsapp",
+    "telefonecliente",
+    "id",
+  ];
+  const legacyDefault = String(env.REPROCESS_PAUSE_DEFAULT_PHONE_COLUMN || "").trim().toLowerCase();
+
+  return buildLookupColumns(
+    env.REPROCESS_PAUSE_DEFAULT_LOOKUP_COLUMNS,
+    legacyDefault,
+    fallback,
+  );
+}
+
+function parseBoolean(rawValue, fallbackValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return fallbackValue;
+  }
+
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (["1", "true", "yes", "sim"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "nao", "não"].includes(normalized)) {
+    return false;
+  }
+
+  return fallbackValue;
+}
+
+function parsePauseAutoDetectDefault(env = process.env) {
+  return parseBoolean(env.REPROCESS_PAUSE_AUTO_DETECT_TABLE, true);
+}
+
+function parsePauseSuffixDefault(env = process.env) {
+  return String(env.REPROCESS_PAUSE_TABLE_SUFFIX || "pausar")
+    .trim()
+    .toLowerCase();
 }
 
 function buildBasePayload({ clientKey, lastUserMessage, contact, conversation }) {
@@ -93,6 +157,10 @@ const payloadBuilders = {
 function getClientsRegistry(env = process.env) {
   const globalTimeoutMs = parseGlobalTimeoutMs(env);
   const globalRetryCount = parseGlobalRetryCount(env);
+  const defaultPauseSchema = parsePauseDefaultSchema(env);
+  const defaultPauseLookupColumns = parsePauseDefaultLookupColumns(env);
+  const defaultPauseAutoDetect = parsePauseAutoDetectDefault(env);
+  const defaultPauseSuffix = parsePauseSuffixDefault(env);
   const mappings = listWebhookMappings();
   const clients = {};
 
@@ -106,6 +174,12 @@ function getClientsRegistry(env = process.env) {
     const envPrefix = `CLIENT_${envKey}_`;
     const builderKey = normalizeClientKey(env[`${envPrefix}PAYLOAD_BUILDER`] || "default") || "default";
     const payloadBuilder = payloadBuilders[builderKey] || payloadBuilders.default;
+    const legacyPausePhoneColumn = String(env[`${envPrefix}PAUSE_PHONE_COLUMN`] || "").trim().toLowerCase();
+    const pauseLookupColumns = buildLookupColumns(
+      env[`${envPrefix}PAUSE_LOOKUP_COLUMNS`],
+      legacyPausePhoneColumn,
+      defaultPauseLookupColumns,
+    );
 
     clients[key] = {
       key,
@@ -118,6 +192,21 @@ function getClientsRegistry(env = process.env) {
       timeoutMs: parsePositiveInteger(env[`${envPrefix}TIMEOUT_MS`], globalTimeoutMs),
       retryCount: parsePositiveInteger(env[`${envPrefix}RETRY_COUNT`], globalRetryCount),
       chatwootAccountIds: parseCsvInteger(env[`${envPrefix}CHATWOOT_ACCOUNT_IDS`]),
+      pauseTable: String(env[`${envPrefix}PAUSE_TABLE`] || "").trim(),
+      pauseSchema: String(env[`${envPrefix}PAUSE_SCHEMA`] || defaultPauseSchema).trim(),
+      pausePhoneColumn: legacyPausePhoneColumn || pauseLookupColumns[0] || "telefone",
+      pauseLookupColumns,
+      pauseAutoDetectTable: parseBoolean(
+        env[`${envPrefix}PAUSE_AUTO_DETECT_TABLE`],
+        defaultPauseAutoDetect,
+      ),
+      pauseTableSuffix: String(env[`${envPrefix}PAUSE_TABLE_SUFFIX`] || defaultPauseSuffix)
+        .trim()
+        .toLowerCase(),
+      pauseFlagColumn: String(env[`${envPrefix}PAUSE_FLAG_COLUMN`] || "").trim(),
+      pauseFlagTrueValues: parseCsvLower(
+        env[`${envPrefix}PAUSE_FLAG_TRUE_VALUES`] || "true,1,sim,yes,paused,pausado",
+      ),
       payloadBuilder,
     };
   }
@@ -132,6 +221,7 @@ export function listReprocessClients() {
     webhook_url: client.webhookUrl,
     chatwoot_account_ids: client.chatwootAccountIds,
     webhook_configured: Boolean(client.webhookUrl),
+    pause_check_configured: Boolean(client.pauseTable || client.pauseAutoDetectTable),
   }));
 }
 

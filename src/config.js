@@ -62,6 +62,15 @@ export function getConfig() {
     enableMediaAi: String(process.env.ENABLE_MEDIA_AI || "false").toLowerCase() === "true",
     mediaAudioPromptPath: process.env.MEDIA_AUDIO_PROMPT_PATH || "prompts/media_audio_prompt.txt",
     mediaImagePromptPath: process.env.MEDIA_IMAGE_PROMPT_PATH || "prompts/media_image_prompt.txt",
+    supabaseUrl: String(process.env.SUPABASE_URL || "").trim(),
+    supabaseServiceRoleKey: String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim(),
+    pauseCheckTimeoutMs: Number(process.env.PAUSE_CHECK_TIMEOUT_MS || 8000),
+    n8nErrorCallbackSecret: String(process.env.N8N_ERROR_CALLBACK_SECRET || "").trim(),
+    n8nErrorCallbackHeader: String(
+      process.env.N8N_ERROR_CALLBACK_HEADER || "x-n8n-error-secret",
+    )
+      .trim()
+      .toLowerCase(),
   };
 }
 

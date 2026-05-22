@@ -10,18 +10,20 @@ import {
 } from "./reprocessClients.js";
 import { getWebhookHeaderTemplate } from "./webhookResolver.js";
 import { buildMergedUserText } from "./messageEnricher.js";
+import { checkClientPauseStatus } from "./pauseChecker.js";
 
 export class ReprocessApiError extends Error {
-  constructor(code, message, statusCode = 400) {
+  constructor(code, message, statusCode = 400, details = null) {
     super(message);
     this.name = "ReprocessApiError";
     this.code = code;
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 
-function fail(code, message, statusCode = 400) {
-  throw new ReprocessApiError(code, message, statusCode);
+function fail(code, message, statusCode = 400, details = null) {
+  throw new ReprocessApiError(code, message, statusCode, details);
 }
 
 function ensureChatwootHostMatches(conversationUrl, configuredBaseUrl) {
@@ -209,6 +211,191 @@ function mapChatwootError(error) {
   );
 }
 
+function parseJsonSafe(rawText) {
+  try {
+    return JSON.parse(String(rawText || ""));
+  } catch {
+    return null;
+  }
+}
+
+function truncateText(value, max = 600) {
+  const text = String(value || "");
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function pickUpstreamMessage(parsedBody, rawBody) {
+  if (!parsedBody || typeof parsedBody !== "object") {
+    return truncateText(rawBody, 500);
+  }
+
+  const messageCandidates = [
+    parsedBody.message,
+    parsedBody.error?.message,
+    parsedBody.error_description,
+    parsedBody.description,
+    parsedBody.reason,
+    parsedBody.error,
+  ];
+
+  const first = messageCandidates.find((item) => typeof item === "string" && item.trim().length > 0);
+  if (first) {
+    return truncateText(first, 500);
+  }
+
+  return truncateText(rawBody, 500);
+}
+
+function classifyWebhookFailure({ statusCode, responseBody }) {
+  const parsed = parseJsonSafe(responseBody);
+  const upstreamMessage = pickUpstreamMessage(parsed, responseBody);
+  const normalized = `${statusCode} ${upstreamMessage}`.toLowerCase();
+
+  let category = "upstream_workflow_error";
+  let title = "Erro no workflow remoto";
+  let likelyCause =
+    "O n8n recebeu a chamada, mas ocorreu erro interno durante o processamento do fluxo.";
+  let suggestion =
+    "Verifique no n8n qual no falhou nessa execucao e ajuste tratamento/fallback do fluxo.";
+
+  if (normalized.includes("supabase") && /(pause|paused|suspend|inativ|disabled)/.test(normalized)) {
+    category = "supabase_ai_paused";
+    title = "Supabase/IA pausada";
+    likelyCause = "O fluxo indica que a automacao/IA no Supabase esta pausada ou indisponivel.";
+    suggestion = "Reativar o status da IA no Supabase e testar novamente.";
+  } else if (
+    normalized.includes("variable") &&
+    normalized.includes("not found")
+  ) {
+    category = "workflow_variable_not_found";
+    title = "Variavel ausente no fluxo";
+    likelyCause = "O fluxo tentou usar uma variavel que nao existe no contexto desta execucao.";
+    suggestion = "Revisar o node com erro e validar nomes/caminhos de variaveis no n8n.";
+  } else if (normalized.includes("dify") && /(unavailable|timeout|refused|down|503|504|502|failed)/.test(normalized)) {
+    category = "dify_unavailable";
+    title = "Dify indisponivel";
+    likelyCause = "O workflow nao conseguiu acessar o Dify (queda, timeout ou indisponibilidade).";
+    suggestion = "Validar status do Dify e conectividade do ambiente n8n para o endpoint do Dify.";
+  } else if (
+    normalized.includes("openai") &&
+    /(invalid_api_key|api key|unauthorized|401|insufficient_quota|quota|billing|credit)/.test(normalized)
+  ) {
+    category = "openai_auth_or_quota";
+    title = "OpenAI sem token/credito";
+    likelyCause = "Erro de autenticacao ou de quota/credito da OpenAI no fluxo remoto.";
+    suggestion = "Conferir chave da OpenAI no n8n e saldo/quota da conta.";
+  } else if (statusCode === 404) {
+    category = "webhook_not_found";
+    title = "Webhook nao encontrado";
+    likelyCause = "A URL de webhook pode estar incorreta, desativada ou removida no n8n.";
+    suggestion = "Validar URL em empresas.json e confirmar que o workflow/webhook esta ativo.";
+  } else if (statusCode === 401 || statusCode === 403) {
+    category = "webhook_auth_error";
+    title = "Falha de autenticacao no webhook";
+    likelyCause = "O webhook rejeitou a chamada por token/header invalido.";
+    suggestion = "Conferir headers de secret/HMAC esperados pelo workflow.";
+  }
+
+  return {
+    category,
+    title,
+    likely_cause: likelyCause,
+    suggestion,
+    status_code: statusCode,
+    upstream_message: upstreamMessage,
+    upstream_body_excerpt: truncateText(responseBody, 1200),
+  };
+}
+
+function detectLogicalFailureInSuccessResponse(responseText) {
+  const parsed = parseJsonSafe(responseText);
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+
+  const statusFromBody = Number(parsed?.status || parsed?.status_code || parsed?.error?.status || 0);
+  const code = String(parsed?.code || parsed?.error?.code || "").toLowerCase();
+  const message = String(
+    parsed?.message || parsed?.error?.message || parsed?.description || "",
+  ).toLowerCase();
+  const successFlag = parsed?.success;
+
+  if (statusFromBody >= 400) {
+    return {
+      statusCode: statusFromBody,
+      reason: "status_code_in_body",
+    };
+  }
+
+  if (successFlag === false) {
+    return {
+      statusCode: 422,
+      reason: "success_false_in_body",
+    };
+  }
+
+  if (code && /(invalid_param|error|failed|fail|exception)/.test(code)) {
+    return {
+      statusCode: 422,
+      reason: "error_code_in_body",
+    };
+  }
+
+  if (/run failed|variable .* not found|bad request|invalid_param/.test(message)) {
+    return {
+      statusCode: 422,
+      reason: "error_message_in_body",
+    };
+  }
+
+  return null;
+}
+
+function classifyNetworkFailure(error, timeoutMs) {
+  const isTimeout = error?.name === "AbortError";
+  const code = error?.code || error?.cause?.code || "";
+  const causeMessage = error?.cause?.message || error?.message || "falha de rede";
+  const normalized = `${code} ${causeMessage}`.toLowerCase();
+
+  let category = "network_error";
+  let title = "Falha de rede ao chamar webhook";
+  let likelyCause = "Nao foi possivel estabelecer comunicacao com o endpoint remoto.";
+  let suggestion = "Validar DNS/rede/firewall e disponibilidade do dominio do webhook.";
+
+  if (isTimeout) {
+    category = "network_timeout";
+    title = "Timeout na chamada do webhook";
+    likelyCause = `O endpoint nao respondeu dentro de ${timeoutMs}ms.`;
+    suggestion = "Aumentar timeout ou ajustar o workflow para responder mais rapido.";
+  } else if (normalized.includes("enotfound") || normalized.includes("eai_again")) {
+    category = "dns_resolution_error";
+    title = "Falha de DNS";
+    likelyCause = "O host do webhook nao foi resolvido neste ambiente.";
+    suggestion = "Checar DNS/rede local e disponibilidade do dominio.";
+  } else if (normalized.includes("econnrefused")) {
+    category = "connection_refused";
+    title = "Conexao recusada";
+    likelyCause = "O host respondeu recusando conexao na porta alvo.";
+    suggestion = "Verificar se o servico de destino esta ativo e aceitando conexoes HTTPS.";
+  } else if (normalized.includes("econnreset") || normalized.includes("socket")) {
+    category = "connection_reset";
+    title = "Conexao encerrada pelo servidor";
+    likelyCause = "A conexao foi encerrada no meio da requisicao (proxy/WAF/upstream).";
+    suggestion = "Verificar logs do Cloudflare/proxy/n8n para reset de conexao.";
+  }
+
+  return {
+    category,
+    title,
+    likely_cause: likelyCause,
+    suggestion,
+    error_code: code || null,
+    error_message: String(error?.message || "erro de rede"),
+    error_cause: causeMessage,
+    is_timeout: isTimeout,
+  };
+}
+
 function getRawConversationUrl(input) {
   return String(input?.conversationUrl || input?.conversation_url || input?.chat_url || "").trim();
 }
@@ -255,6 +442,18 @@ function extractCoreConversationId(payload) {
 
 function extractCoreContactId(payload) {
   return Number(payload?.contact_id || payload?.meta?.sender?.id || 0) || "";
+}
+
+function extractPhoneForPauseCheck(payload) {
+  const candidates = [
+    payload?.meta?.sender?.phone_number,
+    payload?.messages?.[0]?.sender?.phone_number,
+    payload?.contact_inbox?.source_id,
+    payload?.phone,
+  ];
+
+  const first = candidates.find((value) => String(value || "").trim().length > 0);
+  return String(first || "").trim();
 }
 
 function buildIdempotencyKey(clientKey, payload) {
@@ -371,7 +570,7 @@ export async function buildReprocessPreview({ input, config }) {
   return payloadCompleto;
 }
 
-export async function executeReprocessWebhook({ input }) {
+export async function executeReprocessWebhook({ input, config }) {
   const clientKey = getClientInput(input);
   const payload = input?.payload;
 
@@ -394,6 +593,42 @@ export async function executeReprocessWebhook({ input }) {
 
   const normalizedPayload = Array.isArray(payload) ? payload[0] : payload;
   const webhookBody = normalizedPayload?.body || payload;
+  const phoneForPauseCheck = extractPhoneForPauseCheck(webhookBody);
+  const pauseStatus = await checkClientPauseStatus({
+    clientConfig,
+    phone: phoneForPauseCheck,
+    config,
+    timeoutMs: Number(config?.pauseCheckTimeoutMs || 8000),
+  });
+
+  if (pauseStatus.checked && pauseStatus.paused) {
+    logEvent("info", "reprocess_skipped_paused", {
+      client: clientKey,
+      conversation_id: extractCoreConversationId(webhookBody) || null,
+      contact_id: extractCoreContactId(webhookBody) || null,
+      matched_phone: pauseStatus.matched_phone || null,
+      pause_table: pauseStatus.table || null,
+    });
+
+    return {
+      success: true,
+      skipped: true,
+      status: "paused",
+      message: "Reprocessamento nao enviado: contato com IA pausada no Supabase.",
+      pause_status: {
+        event_type: "status",
+        category: "supabase_ai_paused",
+        title: "IA pausada no Supabase",
+        likely_cause:
+          "Contato encontrado na tabela de pausa configurada para este cliente.",
+        suggestion: "Remover a pausa no Supabase e tentar novamente.",
+        conversation_id: extractCoreConversationId(webhookBody) || null,
+        client: clientKey,
+        ...pauseStatus,
+      },
+    };
+  }
+
   const requestId = randomUUID();
   const payloadText = JSON.stringify(webhookBody);
   const idempotencyKey = buildIdempotencyKey(clientKey, webhookBody);
@@ -419,6 +654,7 @@ export async function executeReprocessWebhook({ input }) {
   const maxAttempts = Number(clientConfig.retryCount || 0) + 1;
   let lastErrorMessage = "Erro nao identificado";
   let lastStatusCode = null;
+  let lastErrorDetails = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController();
@@ -444,7 +680,40 @@ export async function executeReprocessWebhook({ input }) {
 
       clearTimeout(timeout);
 
+      const responseText = await response.text();
+
       if (response.ok) {
+        const logicalFailure = detectLogicalFailureInSuccessResponse(responseText);
+        if (logicalFailure) {
+          const classified = classifyWebhookFailure({
+            statusCode: logicalFailure.statusCode,
+            responseBody: responseText,
+          });
+
+          lastStatusCode = logicalFailure.statusCode;
+          lastErrorMessage = `Webhook respondeu HTTP 200, mas com erro logico no body: ${responseText || "(vazio)"}`;
+          lastErrorDetails = {
+            ...classified,
+            request_id: requestId,
+            client: clientKey,
+            attempt,
+            http_status_code: response.status,
+            logical_failure: logicalFailure.reason,
+          };
+
+          logEvent("error", "webhook_send_failed_logical_response", {
+            request_id: requestId,
+            client: clientKey,
+            attempt,
+            http_status_code: response.status,
+            logical_status_code: logicalFailure.statusCode,
+            logical_failure: logicalFailure.reason,
+            response_body: responseText || "",
+          });
+
+          break;
+        }
+
         logEvent("info", "webhook_send_success", {
           request_id: requestId,
           client: clientKey,
@@ -459,12 +728,21 @@ export async function executeReprocessWebhook({ input }) {
           message: "Reprocessamento enviado com sucesso.",
           request_id: requestId,
           idempotency_key: idempotencyKey,
+          pause_status: pauseStatus.checked ? pauseStatus : null,
         };
       }
-
-      const responseText = await response.text();
+      const classified = classifyWebhookFailure({
+        statusCode: response.status,
+        responseBody: responseText,
+      });
       lastStatusCode = response.status;
       lastErrorMessage = `Webhook respondeu com status ${response.status}. Body: ${responseText || "(vazio)"}`;
+      lastErrorDetails = {
+        ...classified,
+        request_id: requestId,
+        client: clientKey,
+        attempt,
+      };
 
       logEvent("error", "webhook_send_failed_response", {
         request_id: requestId,
@@ -481,9 +759,16 @@ export async function executeReprocessWebhook({ input }) {
       clearTimeout(timeout);
 
       const isAbort = error?.name === "AbortError";
+      const classifiedNetwork = classifyNetworkFailure(error, Number(clientConfig.timeoutMs || 10000));
       lastErrorMessage = isAbort
         ? `Timeout ao chamar webhook apos ${Number(clientConfig.timeoutMs || 10000)}ms`
         : `Erro ao chamar o webhook: ${error?.message || "falha de rede"}`;
+      lastErrorDetails = {
+        ...classifiedNetwork,
+        request_id: requestId,
+        client: clientKey,
+        attempt,
+      };
 
       logEvent("error", "webhook_send_failed_network", {
         request_id: requestId,
@@ -509,6 +794,7 @@ export async function executeReprocessWebhook({ input }) {
     "webhook_request_error",
     `${lastErrorMessage} (request_id=${requestId}${lastStatusCode ? `, status=${lastStatusCode}` : ""})`,
     502,
+    lastErrorDetails,
   );
 }
 
@@ -568,6 +854,7 @@ export async function testWebhookConnection({ input }) {
   } catch (error) {
     clearTimeout(timer);
     const isTimeout = error?.name === "AbortError";
+    const details = classifyNetworkFailure(error, timeoutMs);
 
     fail(
       "webhook_connection_test_failed",
@@ -575,6 +862,7 @@ export async function testWebhookConnection({ input }) {
         ? `Timeout no teste de conexao apos ${timeoutMs}ms`
         : `Falha no teste de conexao: ${error?.message || "erro de rede"}`,
       502,
+      details,
     );
   }
 }
