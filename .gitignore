@@ -15,6 +15,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
+data/n8n-events.json
 
 # Build/test artifacts
 dist/

@@ -1,5 +1,10 @@
-const MAX_EVENTS = 200;
-const events = [];
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
+let MAX_EVENTS = 500;
+let storeFilePath = path.resolve(process.cwd(), "data", "n8n-events.json");
+let events = [];
+const DEDUPE_WINDOW_MS = 20 * 60 * 1000;
 
 function toLower(value) {
   return String(value || "").toLowerCase();
@@ -26,6 +31,144 @@ function isRecentEvent(event, maxAgeMs) {
   }
 
   return Date.now() - ts <= maxAgeMs;
+}
+
+function ensureStoreDirectoryExists(filePath) {
+  const dirPath = path.dirname(filePath);
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function parseStoreFile(rawText) {
+  try {
+    const parsed = JSON.parse(String(rawText || ""));
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+
+    if (Array.isArray(parsed?.events)) {
+      return parsed.events;
+    }
+
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function persistEvents() {
+  ensureStoreDirectoryExists(storeFilePath);
+  writeFileSync(
+    storeFilePath,
+    JSON.stringify(
+      {
+        version: 1,
+        updated_at: new Date().toISOString(),
+        total: events.length,
+        events,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
+function loadPersistedEvents() {
+  try {
+    if (!existsSync(storeFilePath)) {
+      events = [];
+      return;
+    }
+
+    const content = readFileSync(storeFilePath, "utf8");
+    const parsedEvents = parseStoreFile(content)
+      .filter((item) => item && typeof item === "object")
+      .slice(0, MAX_EVENTS);
+    events = parsedEvents;
+  } catch {
+    events = [];
+  }
+}
+
+function appendEvent(event) {
+  const dedupeKey = buildEventDedupeKey(event);
+  if (dedupeKey) {
+    const existingIndex = events.findIndex((item) => {
+      if (buildEventDedupeKey(item) !== dedupeKey) {
+        return false;
+      }
+      return isRecentEvent(item, DEDUPE_WINDOW_MS);
+    });
+
+    if (existingIndex >= 0) {
+      const existing = events[existingIndex];
+      const merged = {
+        ...existing,
+        ...event,
+        received_at: event?.received_at || new Date().toISOString(),
+        duplicate_count: Number(existing?.duplicate_count || 1) + 1,
+      };
+      events.splice(existingIndex, 1);
+      events.unshift(merged);
+      persistEvents();
+      return merged;
+    }
+  }
+
+  events.unshift({
+    ...event,
+    duplicate_count: Number(event?.duplicate_count || 1),
+  });
+  if (events.length > MAX_EVENTS) {
+    events.length = MAX_EVENTS;
+  }
+  persistEvents();
+  return events[0];
+}
+
+function stableEventText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function buildEventDedupeKey(event) {
+  const type = stableEventText(event?.event_type);
+  const category = stableEventText(event?.category);
+  const requestId = stableEventText(event?.request_id);
+  const conversationId = stableEventText(event?.conversation_id);
+  const client = stableEventText(event?.client);
+  const executionId = stableEventText(event?.execution_id);
+  const status = stableEventText(event?.status);
+  const failedNode = stableEventText(event?.failed_node);
+  const nodesExecuted = Number(event?.nodes_executed || 0) || 0;
+  const cause = stableEventText(event?.likely_cause || event?.error_message || event?.error_description);
+
+  if (requestId) {
+    if (category === "n8n_execution_lookup_failed") {
+      return `${type}|${category}|req:${requestId}`;
+    }
+
+    if (type === "execution") {
+      return `${type}|${category}|req:${requestId}|status:${status}|exec:${executionId}|node:${failedNode}|nodes:${nodesExecuted}`;
+    }
+
+    if (type === "status") {
+      return `${type}|${category}|req:${requestId}|exec:${executionId}|cause:${cause}`;
+    }
+
+    return `${type}|${category}|req:${requestId}|exec:${executionId}|cause:${cause}`;
+  }
+
+  if (executionId) {
+    return `${type}|${category}|exec:${executionId}|status:${status}|node:${failedNode}`;
+  }
+
+  if (conversationId && client) {
+    return `${type}|${category}|conv:${conversationId}|client:${client}|cause:${cause}`;
+  }
+
+  return "";
 }
 
 function parseN8nErrorPayload(input) {
@@ -140,22 +283,91 @@ function parseN8nStatusPayload(input) {
   };
 }
 
+function normalizeExecutionPayload(event) {
+  const normalized = {
+    event_type: "execution",
+    received_at: new Date().toISOString(),
+    category: String(event?.category || "n8n_execution_status").trim(),
+    title: String(event?.title || "Status da execucao n8n").trim(),
+    likely_cause: String(event?.likely_cause || "Status da execucao atualizado via API do n8n.").trim(),
+    suggestion: String(event?.suggestion || "Verificar detalhes da execucao no n8n.").trim(),
+    workflow_name: event?.workflow_name || null,
+    workflow_id: event?.workflow_id || null,
+    execution_id: event?.execution_id || null,
+    execution_url: event?.execution_url || null,
+    failed_node: event?.failed_node || null,
+    n8n_http_code: event?.n8n_http_code || null,
+    error_message: event?.error_message || null,
+    error_description: event?.error_description || null,
+    upstream_messages: Array.isArray(event?.upstream_messages) ? event.upstream_messages.slice(0, 3) : [],
+    request_id: event?.request_id || null,
+    conversation_id: event?.conversation_id || null,
+    client: event?.client || null,
+    status: event?.status || null,
+    nodes_executed: Number(event?.nodes_executed || 0) || 0,
+    source: event?.source || "n8n_api_poll",
+  };
+
+  return normalized;
+}
+
+function buildDispatchStatusEvent(input) {
+  return {
+    event_type: "status",
+    received_at: new Date().toISOString(),
+    category: "webhook_dispatched",
+    title: "Payload enviado ao webhook",
+    likely_cause: "Webhook recebeu a requisicao inicial de reprocessamento.",
+    suggestion: "Aguardar retorno do fluxo ou consultar status da execucao no n8n.",
+    workflow_name: null,
+    workflow_id: null,
+    execution_id: null,
+    execution_url: null,
+    failed_node: null,
+    n8n_http_code: input?.httpStatusCode || null,
+    error_message: null,
+    error_description: null,
+    upstream_messages: [],
+    request_id: input?.request_id || null,
+    conversation_id: input?.conversation_id || null,
+    client: input?.client || null,
+  };
+}
+
+export function configureN8nEventStore({
+  filePath,
+  maxEvents,
+} = {}) {
+  if (filePath) {
+    storeFilePath = path.resolve(process.cwd(), String(filePath));
+  }
+
+  const parsedMax = Number(maxEvents);
+  if (Number.isInteger(parsedMax) && parsedMax > 0) {
+    MAX_EVENTS = parsedMax;
+  }
+
+  loadPersistedEvents();
+}
+
 export function registerN8nErrorEvent(rawPayload) {
   const parsed = parseN8nErrorPayload(rawPayload);
-  events.unshift(parsed);
-  if (events.length > MAX_EVENTS) {
-    events.length = MAX_EVENTS;
-  }
-  return parsed;
+  return appendEvent(parsed);
 }
 
 export function registerN8nStatusEvent(rawPayload) {
   const parsed = parseN8nStatusPayload(rawPayload);
-  events.unshift(parsed);
-  if (events.length > MAX_EVENTS) {
-    events.length = MAX_EVENTS;
-  }
-  return parsed;
+  return appendEvent(parsed);
+}
+
+export function registerN8nExecutionEvent(payload) {
+  const parsed = normalizeExecutionPayload(payload);
+  return appendEvent(parsed);
+}
+
+export function registerWebhookDispatchEvent(payload) {
+  const parsed = buildDispatchStatusEvent(payload || {});
+  return appendEvent(parsed);
 }
 
 export function getLatestN8nErrorEvent({ client, conversationId, requestId } = {}) {
@@ -245,7 +457,57 @@ export function getLatestN8nStatusEvent({ client, conversationId, requestId } = 
   );
 }
 
-export function listRecentN8nEvents({ limit = 20 } = {}) {
-  const safeLimit = Math.max(1, Math.min(Number(limit || 20), 100));
-  return events.slice(0, safeLimit);
+export function getLatestN8nExecutionEvent({ client, conversationId, requestId } = {}) {
+  const byClient = toLower(client);
+  const byConversation = String(conversationId || "").trim();
+  const byRequestId = String(requestId || "").trim();
+
+  return (
+    events.find((event) => {
+      if (String(event?.event_type || "") !== "execution") {
+        return false;
+      }
+
+      if (byRequestId && String(event.request_id || "") !== byRequestId) {
+        return false;
+      }
+
+      if (byConversation && String(event.conversation_id || "") !== byConversation) {
+        return false;
+      }
+
+      if (byClient && toLower(event.client) !== byClient) {
+        return false;
+      }
+
+      return true;
+    }) || null
+  );
 }
+
+export function listRecentN8nEvents({ limit = 20, client } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit || 20), 100));
+  const byClient = toLower(client);
+  const source = byClient
+    ? events.filter((event) => toLower(event.client) === byClient)
+    : events;
+
+  const deduped = [];
+  const seen = new Set();
+
+  for (const event of source) {
+    const key = buildEventDedupeKey(event) || `${stableEventText(event?.event_type)}|${stableEventText(event?.category)}|${stableEventText(event?.received_at)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(event);
+    if (deduped.length >= safeLimit) {
+      break;
+    }
+  }
+
+  return deduped;
+}
+
+configureN8nEventStore();

@@ -51,6 +51,13 @@ export function loadEnvFile(path = ".env") {
 }
 
 export function getConfig() {
+  const n8nReconcileDelaysMs = String(
+    process.env.N8N_RECONCILE_DELAYS_MS || "5000,15000,30000",
+  )
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
   return {
     port: Number(process.env.PORT || 3000),
     chatwootBaseUrl: (process.env.CHATWOOT_BASE_URL || "").replace(/\/$/, ""),
@@ -65,12 +72,23 @@ export function getConfig() {
     supabaseUrl: String(process.env.SUPABASE_URL || "").trim(),
     supabaseServiceRoleKey: String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim(),
     pauseCheckTimeoutMs: Number(process.env.PAUSE_CHECK_TIMEOUT_MS || 8000),
+    pauseCheckSampleLimit: Number(process.env.PAUSE_CHECK_SAMPLE_LIMIT || 200),
     n8nErrorCallbackSecret: String(process.env.N8N_ERROR_CALLBACK_SECRET || "").trim(),
     n8nErrorCallbackHeader: String(
       process.env.N8N_ERROR_CALLBACK_HEADER || "x-n8n-error-secret",
     )
       .trim()
       .toLowerCase(),
+    n8nApiBaseUrl: String(process.env.N8N_API_BASE_URL || "")
+      .trim()
+      .replace(/\/+$/, ""),
+    n8nApiKey: String(process.env.N8N_API_KEY || "").trim(),
+    n8nApiTimeoutMs: Number(process.env.N8N_API_TIMEOUT_MS || 30000),
+    n8nReconcileEnabled: String(process.env.N8N_RECONCILE_ENABLED || "true").toLowerCase() === "true",
+    n8nReconcileDelaysMs,
+    n8nExecutionLookbackLimit: Number(process.env.N8N_EXECUTION_LOOKBACK_LIMIT || 40),
+    n8nEventStorePath: String(process.env.N8N_EVENT_STORE_PATH || "data/n8n-events.json").trim(),
+    n8nEventStoreMaxEvents: Number(process.env.N8N_EVENT_STORE_MAX_EVENTS || 500),
   };
 }
 

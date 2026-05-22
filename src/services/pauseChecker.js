@@ -112,10 +112,11 @@ function scorePauseTableMatch(clientName, tableName) {
 
 export async function resolvePauseTableName(clientConfig, config) {
   const explicitPauseTable = String(clientConfig?.pauseTable || "").trim();
+  const explicitSource = String(clientConfig?.pauseTableSource || "env").trim() || "env";
   if (explicitPauseTable) {
     return {
       table: explicitPauseTable,
-      source: "env",
+      source: explicitSource,
       reason: null,
     };
   }
@@ -181,6 +182,19 @@ function normalizeDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
+function normalizePhoneForCompare(value) {
+  const digits = normalizeDigits(value);
+  if (!digits) {
+    return "";
+  }
+
+  if (digits.startsWith("55") && digits.length > 11) {
+    return digits.slice(2);
+  }
+
+  return digits;
+}
+
 function buildPhoneCandidates(inputPhone) {
   const raw = String(inputPhone || "").trim();
   const digits = normalizeDigits(raw);
@@ -192,6 +206,7 @@ function buildPhoneCandidates(inputPhone) {
 
   if (digits) {
     candidates.push(digits);
+    candidates.push(normalizePhoneForCompare(digits));
 
     if (!raw.startsWith("+")) {
       candidates.push(`+${digits}`);
@@ -199,6 +214,7 @@ function buildPhoneCandidates(inputPhone) {
 
     if (digits.startsWith("55") && digits.length > 11) {
       candidates.push(digits.slice(2));
+      candidates.push(`+${digits.slice(2)}`);
     }
   }
 
@@ -445,6 +461,84 @@ async function fetchPauseRows({
   }
 }
 
+async function fetchPauseRowsSample({
+  supabaseClient,
+  schema,
+  table,
+  limit = 200,
+}) {
+  try {
+    const { data, error, status } = await supabaseClient
+      .schema(schema)
+      .from(table)
+      .select("*")
+      .limit(Math.max(1, Math.min(Number(limit || 200), 1000)));
+
+    if (error) {
+      return {
+        ok: false,
+        status: Number(status || 500),
+        rows: [],
+        rawText: error.message || "erro supabase",
+      };
+    }
+
+    return {
+      ok: true,
+      status: Number(status || 200),
+      rows: Array.isArray(data) ? data : [],
+      rawText: "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 500,
+      rows: [],
+      rawText: error?.message || "erro supabase",
+    };
+  }
+}
+
+function findPauseRowByNormalizedPhone({
+  rows,
+  phoneColumns,
+  candidates,
+}) {
+  const normalizedCandidates = new Set(
+    (candidates || [])
+      .map(normalizePhoneForCompare)
+      .filter(Boolean),
+  );
+
+  if (normalizedCandidates.size === 0) {
+    return null;
+  }
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const phoneColumn of phoneColumns || []) {
+      const rowValue = row?.[phoneColumn];
+      if (rowValue === null || rowValue === undefined) {
+        continue;
+      }
+
+      const normalizedRowValue = normalizePhoneForCompare(rowValue);
+      if (!normalizedRowValue) {
+        continue;
+      }
+
+      if (normalizedCandidates.has(normalizedRowValue)) {
+        return {
+          row,
+          phoneColumn,
+          matchedPhone: normalizedRowValue,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function checkClientPauseStatus({
   clientConfig,
   phone,
@@ -490,6 +584,10 @@ export async function checkClientPauseStatus({
   );
 
   const supabaseClient = createSupabaseAdminClient(config);
+  const sampleLimit = Math.max(
+    50,
+    Math.min(Number(config?.pauseCheckSampleLimit || 200), 1000),
+  );
 
   if (!supabaseClient) {
     return {
@@ -581,6 +679,44 @@ export async function checkClientPauseStatus({
       table_columns_source: tableInspection?.columns_source || "unavailable",
       lookup_columns_tried: phoneColumns,
     };
+  }
+
+  const sampleResult = await fetchPauseRowsSample({
+    supabaseClient,
+    schema: pauseSchema,
+    table: pauseTable,
+    limit: sampleLimit,
+  });
+
+  if (sampleResult.ok && Array.isArray(sampleResult.rows) && sampleResult.rows.length > 0) {
+    const normalizedMatch = findPauseRowByNormalizedPhone({
+      rows: sampleResult.rows,
+      phoneColumns,
+      candidates,
+    });
+
+    if (normalizedMatch?.row) {
+      const row = normalizedMatch.row;
+      const paused = pauseFlagColumn
+        ? isPausedByFlagValue(row[pauseFlagColumn], pauseFlagTrueValues)
+        : true;
+
+      return {
+        checked: true,
+        paused,
+        reason: paused ? "paused_found_normalized" : "pause_flag_false_normalized",
+        matched_phone: normalizedMatch.matchedPhone,
+        table: pauseTable,
+        pause_table_source: pauseTableResolution?.source || "env",
+        phone_column: normalizedMatch.phoneColumn,
+        flag_column: pauseFlagColumn || null,
+        table_columns: tableInspection?.ok
+          ? tableInspection.columns.map((column) => column.name)
+          : [],
+        table_columns_source: tableInspection?.columns_source || "unavailable",
+        lookup_columns_tried: phoneColumns,
+      };
+    }
   }
 
   return {

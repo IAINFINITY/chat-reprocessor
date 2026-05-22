@@ -2,11 +2,13 @@
   "empresas": [
     {
       "nome": "N8N",
-      "url_webhook": "https://seu-dominio/webhook/n8n-reprocess"
+      "url_webhook": "https://seu-dominio/webhook/n8n-reprocess",
+      "tabela": "N8N - DADOS CONVERSA_pausar"
     },
     {
       "nome": "Cliente Exemplo",
-      "url_webhook": "https://seu-dominio/webhook/cliente-exemplo"
+      "url_webhook": "https://seu-dominio/webhook/cliente-exemplo",
+      "tabela": "CLIENTE EXEMPLO - DADOS CONVERSA_pausar"
     }
   ]
 }

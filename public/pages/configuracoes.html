@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Configurações - IA Infinity</title>
+    <link rel="stylesheet" href="/assets/css/configuracoes-dashboard.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-header-left">
+        <span class="logo-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M3 4h10M3 8h8M3 12h6" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <h1>Configurações</h1>
+        <span class="badge">empresas.json</span>
+      </div>
+      <div class="header-actions">
+        <a href="/reprocessador" class="btn btn-secondary">Voltar ao Reprocessador</a>
+        <button class="theme-toggle" id="themeToggle" aria-label="Alternar tema">
+          <span id="themeIcon"></span>
+        </button>
+      </div>
+    </header>
+
+    <div class="page-body">
+      <div class="main-col">
+        <section class="card anim-card">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Empresas</span>
+            <button id="addCompanyBtn" class="btn btn-secondary btn-sm">Adicionar empresa</button>
+          </div>
+          <div id="companiesContainer"></div>
+          <div class="actions-row" style="margin-top:16px">
+            <button id="saveCompaniesBtn" class="btn btn-primary">Salvar empresas.json</button>
+            <button id="reloadCompaniesBtn" class="btn btn-secondary">Recarregar arquivo</button>
+          </div>
+          <div id="saveFeedback" class="config-feedback"></div>
+          <div class="status-bar" id="statusBar">
+            <span class="status-dot"></span>
+            <span id="statusText">Carregando configurações...</span>
+          </div>
+        </section>
+      </div>
+
+      <div class="side-col">
+        <section class="card anim-side">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Tabelas Supabase</span>
+          </div>
+          <div class="schema-row">
+            <input id="schemaInput" type="text" value="public" />
+            <button id="loadTablesBtn" class="btn btn-secondary btn-sm">Atualizar</button>
+          </div>
+          <div style="height:10px"></div>
+          <input id="tableFilterInput" type="text" placeholder="Filtrar tabela..." />
+          <div style="height:10px"></div>
+          <label for="tableTargetCompanySelect" style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Aplicar tabela em:</label>
+          <select id="tableTargetCompanySelect"></select>
+          <div style="height:10px"></div>
+          <div class="list-scroll" id="supabaseTablesList"></div>
+        </section>
+      </div>
+    </div>
+    <datalist id="supabaseTablesDatalist"></datalist>
+
+    <script defer src="/assets/js/theme-toggle.js"></script>
+    <script defer src="/assets/js/configuracoes-dashboard.js"></script>
+  </body>
+</html>

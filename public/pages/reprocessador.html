@@ -18,6 +18,7 @@
         <span class="badge">v2.0</span>
       </div>
       <div class="header-actions">
+        <a href="/configuracoes" class="btn btn-secondary btn-sm">Configurações</a>
         <button class="theme-toggle" id="themeToggle" aria-label="Alternar tema">
           <span id="themeIcon"></span>
         </button>
@@ -101,6 +102,8 @@
             <tr><td>Recebida em</td><td id="sReceived">-</td></tr>
             <tr><td>Cliente detectado</td><td class="accent" id="sDetected">-</td></tr>
             <tr><td>Webhook destino</td><td class="mono" id="sWebhook" style="font-size:.8rem">-</td></tr>
+            <tr><td>Status Supabase</td><td id="sPauseStatus">-</td></tr>
+            <tr><td>Detalhe pausa</td><td class="mono" id="sPauseDetails" style="font-size:.78rem">-</td></tr>
           </table>
         </section>
 
@@ -111,6 +114,22 @@
           </div>
           <div class="json-block">
             <pre id="output">{}</pre>
+          </div>
+        </section>
+
+        <section class="card anim-card" id="chatPreviewSection">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Preview visual da conversa</span>
+            <button class="card-action" id="refreshChatPreviewBtn">Atualizar chat</button>
+          </div>
+          <div class="chat-preview-status" id="chatPreviewStatus">Aguardando preview da conversa...</div>
+          <div class="chat-thread" id="chatPreviewList"></div>
+          <div class="chat-reprocess-outbox">
+            <div class="chat-reprocess-head">
+              <span>Mensagens detectadas após reprocesso</span>
+              <span class="badge" id="chatReprocessBadge">0</span>
+            </div>
+            <div class="chat-thread chat-thread-out" id="chatReprocessList"></div>
           </div>
         </section>
 
@@ -159,6 +178,31 @@
             <span class="card-title"><span class="bar"></span>Atividade</span>
           </div>
           <div class="activity-feed" id="activityFeed"></div>
+        </section>
+        <section class="card anim-side">
+          <div class="card-header">
+            <span class="card-title"><span class="bar"></span>Timeline n8n</span>
+            <button class="card-action" id="refreshN8nEventsBtn">Atualizar</button>
+          </div>
+          <div class="timeline-toolbar">
+            <select id="n8nTypeFilter" class="timeline-control">
+              <option value="all">Todos</option>
+              <option value="success">Sucesso</option>
+              <option value="error">Erro</option>
+              <option value="running">Em andamento</option>
+              <option value="info">Info</option>
+            </select>
+            <input
+              id="n8nRequestFilter"
+              class="timeline-control"
+              type="text"
+              placeholder="Buscar por request_id"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button class="card-action" id="clearN8nFiltersBtn">Limpar filtro</button>
+          </div>
+          <div class="timeline-feed" id="n8nEventsFeed"></div>
         </section>
       </div>
     </div>

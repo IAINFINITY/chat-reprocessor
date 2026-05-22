@@ -728,6 +728,10 @@ export async function executeReprocessWebhook({ input, config }) {
           message: "Reprocessamento enviado com sucesso.",
           request_id: requestId,
           idempotency_key: idempotencyKey,
+          client: clientKey,
+          conversation_id: extractCoreConversationId(webhookBody) || null,
+          contact_id: extractCoreContactId(webhookBody) || null,
+          webhook_http_status: response.status,
           pause_status: pauseStatus.checked ? pauseStatus : null,
         };
       }
@@ -796,6 +800,47 @@ export async function executeReprocessWebhook({ input, config }) {
     502,
     lastErrorDetails,
   );
+}
+
+export async function previewPauseStatus({ input, config }) {
+  const clientKey = getClientInput(input);
+  const payload = input?.payload;
+
+  if (!clientKey) {
+    fail("client_required", "Informe o cliente para consultar status de pausa.", 400);
+  }
+
+  if (!payload || typeof payload !== "object") {
+    fail("invalid_payload", "Payload invalido para consulta de pausa.", 400);
+  }
+
+  const clientConfig = getReprocessClient(clientKey);
+  if (!clientConfig || !clientConfig.webhookUrl) {
+    fail(
+      "webhook_not_configured",
+      `Webhook nao configurado para o cliente '${clientKey}'.`,
+      400,
+    );
+  }
+
+  const normalizedPayload = Array.isArray(payload) ? payload[0] : payload;
+  const webhookBody = normalizedPayload?.body || payload;
+  const phoneForPauseCheck = extractPhoneForPauseCheck(webhookBody);
+  const pauseStatus = await checkClientPauseStatus({
+    clientConfig,
+    phone: phoneForPauseCheck,
+    config,
+    timeoutMs: Number(config?.pauseCheckTimeoutMs || 8000),
+  });
+
+  return {
+    success: true,
+    client: clientKey,
+    conversation_id: extractCoreConversationId(webhookBody) || null,
+    contact_id: extractCoreContactId(webhookBody) || null,
+    phone: phoneForPauseCheck || null,
+    pause_status: pauseStatus,
+  };
 }
 
 export async function testWebhookConnection({ input }) {

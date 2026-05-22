@@ -1,0 +1,153 @@
+@import url("/assets/css/dashboard/foundation.css");
+@import url("/assets/css/dashboard/layout.css");
+@import url("/assets/css/dashboard/forms.css");
+@import url("/assets/css/dashboard/components.css");
+@import url("/assets/css/dashboard/utilities.css");
+
+.config-layout {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 18px;
+}
+
+.config-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: var(--bg-alt);
+}
+
+.config-row.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.config-row + .config-row {
+  margin-top: 10px;
+}
+
+.config-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+
+.config-row-title {
+  font-size: 0.73rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.config-row-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.config-row-grid input[data-field="tabela"] {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.mini-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  border-radius: 8px;
+  font-size: 0.74rem;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.mini-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mini-btn.danger {
+  border-color: var(--error);
+  color: var(--error);
+  background: var(--error-soft);
+}
+
+.list-scroll {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  max-height: 420px;
+  overflow: auto;
+}
+
+.table-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-item:last-child {
+  border-bottom: none;
+}
+
+.table-item button {
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--fg);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.table-item button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.table-name {
+  font-size: 0.79rem;
+  color: var(--fg);
+}
+
+.config-empty {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.schema-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.schema-row input {
+  flex: 1;
+}
+
+.config-feedback {
+  margin-top: 10px;
+  min-height: 20px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.config-feedback.success {
+  color: var(--success);
+}
+
+.config-feedback.error {
+  color: var(--error);
+}
+
+@media (max-width: 1100px) {
+  .config-layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -63,6 +63,9 @@ function readWebhooksJsonFile() {
   for (const empresa of empresas) {
     const nome = String(empresa?.nome || "").trim();
     const webhookUrl = String(empresa?.url_webhook || "").trim();
+    const pauseTable = String(
+      empresa?.tabela || empresa?.pause_table || empresa?.tabela_pausar || "",
+    ).trim();
 
     if (!nome || !webhookUrl) {
       continue;
@@ -72,6 +75,7 @@ function readWebhooksJsonFile() {
       nome,
       nome_normalizado: normalizeName(nome),
       webhookUrl,
+      pauseTable,
     });
   }
 
@@ -82,6 +86,7 @@ export function listWebhookMappings() {
   return readWebhooksJsonFile().map((item) => ({
     nome: item.nome,
     webhookUrl: item.webhookUrl,
+    pauseTable: item.pauseTable || "",
   }));
 }
 

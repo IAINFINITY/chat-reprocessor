@@ -8,31 +8,50 @@ import { resolveConversationIdentity } from "../domain/idParser.js";
 import {
   buildReprocessPreview,
   executeReprocessWebhook,
+  previewPauseStatus,
   ReprocessApiError,
   testWebhookConnection,
 } from "../api/reprocessApi.js";
 import {
+  configureN8nEventStore,
+  getLatestN8nExecutionEvent,
   getLatestN8nErrorEvent,
+  listRecentN8nEvents,
   getLatestN8nStatusEvent,
+  registerN8nExecutionEvent,
   registerN8nErrorEvent,
   registerN8nStatusEvent,
+  registerWebhookDispatchEvent,
 } from "../stores/n8nErrorStore.js";
 import { getReprocessClient, listReprocessClients } from "../domain/reprocessClients.js";
 import { reprocessConversation } from "../api/reprocessConversation.js";
 import { listSupabaseExposedTables } from "../clients/supabaseClient.js";
 import { findWebhookMappingByAccountName } from "../domain/webhookResolver.js";
 import { inspectPauseConfigForClient } from "../services/pauseChecker.js";
+import {
+  reconcileExecutionFromN8n,
+  scheduleExecutionReconciliation,
+} from "../services/n8nExecutionTracker.js";
+import {
+  readCompaniesConfig,
+  writeCompaniesConfig,
+} from "../services/companyConfigStore.js";
 
 loadEnvFile();
 
 const config = getConfig();
 assertRequiredConfig(config);
+configureN8nEventStore({
+  filePath: config.n8nEventStorePath,
+  maxEvents: config.n8nEventStoreMaxEvents,
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDirPath = path.resolve(__dirname, "..", "..", "public");
 const indexHtmlPath = path.resolve(publicDirPath, "pages", "index.html");
 const reprocessadorHtmlPath = path.resolve(publicDirPath, "pages", "reprocessador.html");
+const configuracoesHtmlPath = path.resolve(publicDirPath, "pages", "configuracoes.html");
 const STATIC_CONTENT_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -228,6 +247,103 @@ function validateN8nCallbackSecret(req, config) {
   return String(receivedSecret || "").trim() === expectedSecret;
 }
 
+function normalizeChatPreviewContent(message) {
+  const content = String(message?.content || "").trim();
+  if (content) {
+    return content;
+  }
+
+  const processed = String(message?.processed_message_content || "").trim();
+  if (processed) {
+    return processed;
+  }
+
+  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+  const contentType = String(message?.content_type || "").toLowerCase();
+  const hasAudio = attachments.some((item) =>
+    /audio|ogg|mp3|wav|m4a/.test(String(item?.extension || "").toLowerCase()),
+  );
+  const hasImage = attachments.some((item) =>
+    /image|jpg|jpeg|png|webp|gif/.test(
+      `${String(item?.extension || "").toLowerCase()} ${String(item?.file_type || "").toLowerCase()}`,
+    ),
+  );
+
+  if (hasAudio || contentType === "audio") {
+    return "[audio]";
+  }
+
+  if (hasImage || contentType === "image") {
+    return "[imagem]";
+  }
+
+  if (attachments.length > 0) {
+    return `[midia: ${attachments.length} anexo(s)]`;
+  }
+
+  if (contentType && contentType !== "text") {
+    return `[${contentType}]`;
+  }
+
+  return "[mensagem sem texto]";
+}
+
+function mapMessageDirection(message) {
+  if (Boolean(message?.private)) {
+    return "private";
+  }
+
+  const senderType = String(message?.sender_type || message?.sender?.type || "").toLowerCase();
+  const messageType = Number(message?.message_type);
+
+  if (senderType === "contact" || messageType === 0) {
+    return "inbound";
+  }
+
+  if (messageType === 1) {
+    return "outbound";
+  }
+
+  if (messageType === 2 || messageType === 3) {
+    return "system";
+  }
+
+  return "unknown";
+}
+
+function normalizeConversationMessagesForPreview(messagesResponse) {
+  const payload = Array.isArray(messagesResponse?.payload) ? messagesResponse.payload : [];
+  const sorted = [...payload].sort((left, right) => {
+    const byCreatedAt = Number(left?.created_at || 0) - Number(right?.created_at || 0);
+    if (byCreatedAt !== 0) {
+      return byCreatedAt;
+    }
+
+    return Number(left?.id || 0) - Number(right?.id || 0);
+  });
+
+  return sorted.map((message) => {
+    const createdAtSec = Number(message?.created_at || 0);
+    return {
+      id: Number(message?.id || 0) || null,
+      conversation_id: Number(message?.conversation_id || 0) || null,
+      account_id: Number(message?.account_id || 0) || null,
+      message_type: Number(message?.message_type),
+      content_type: String(message?.content_type || "text"),
+      sender_type: String(message?.sender_type || message?.sender?.type || ""),
+      sender_name: String(message?.sender?.name || message?.sender?.available_name || ""),
+      private: Boolean(message?.private),
+      direction: mapMessageDirection(message),
+      attachments_count: Array.isArray(message?.attachments) ? message.attachments.length : 0,
+      content: normalizeChatPreviewContent(message),
+      created_at: createdAtSec || null,
+      created_at_iso: createdAtSec
+        ? new Date(createdAtSec * 1000).toISOString()
+        : null,
+    };
+  });
+}
+
 function mapProfileAccounts(profile) {
   const accounts = Array.isArray(profile?.accounts) ? profile.accounts : [];
 
@@ -274,6 +390,18 @@ const server = createServer(async (req, res) => {
       return json(res, 500, {
         error: "reprocessador_unavailable",
         message: "Nao foi possivel carregar public/pages/reprocessador.html",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/configuracoes") {
+    try {
+      const content = readFileSync(configuracoesHtmlPath, "utf8");
+      return html(res, 200, content);
+    } catch {
+      return json(res, 500, {
+        error: "configuracoes_unavailable",
+        message: "Nao foi possivel carregar public/pages/configuracoes.html",
       });
     }
   }
@@ -334,6 +462,52 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && pathname === "/health") {
     return json(res, 200, { ok: true, service: "chatwoot-reprocess-helper" });
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/chatwoot/messages") {
+    try {
+      const input = await readJsonBody(req);
+      const conversationUrl = String(input?.conversationUrl || input?.conversation_url || "").trim();
+      const limit = Math.max(1, Math.min(Number(input?.limit || 80), 200));
+
+      if (!conversationUrl) {
+        return json(res, 400, {
+          success: false,
+          error: "invalid_link",
+          message: "Informe o link da conversa para carregar o preview visual.",
+        });
+      }
+
+      const identity = resolveConversationIdentity(
+        { chat_url: conversationUrl },
+        config.chatwootBaseUrl,
+      );
+      const chatwootClient = createChatwootClient({
+        baseUrl: identity.baseUrl,
+        apiAccessToken: config.chatwootApiToken,
+      });
+
+      const messagesResponse = await chatwootClient.getConversationMessages(
+        identity.accountId,
+        identity.conversationId,
+      );
+      const normalized = normalizeConversationMessagesForPreview(messagesResponse);
+      const sliced = normalized.slice(Math.max(0, normalized.length - limit));
+
+      return json(res, 200, {
+        success: true,
+        account_id: identity.accountId,
+        conversation_id: identity.conversationId,
+        total: normalized.length,
+        messages: sliced,
+      });
+    } catch (error) {
+      return json(res, 502, {
+        success: false,
+        error: "chatwoot_messages_fetch_failed",
+        message: error?.message || "Falha ao consultar mensagens no Chatwoot.",
+      });
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/reprocess/clients") {
@@ -448,6 +622,47 @@ const server = createServer(async (req, res) => {
     try {
       input = await readJsonBody(req);
       const result = await executeReprocessWebhook({ input, config });
+
+      if (result?.success && result?.request_id) {
+        const conversationId =
+          String(result?.conversation_id || "").trim() ||
+          extractConversationIdFromExecuteInput(input);
+        const client = String(result?.client || input?.client || "")
+          .trim()
+          .toLowerCase();
+        const requestContext = {
+          requestId: String(result.request_id || "").trim(),
+          client,
+          conversationId,
+        };
+
+        registerWebhookDispatchEvent({
+          request_id: requestContext.requestId,
+          client: requestContext.client,
+          conversation_id: requestContext.conversationId,
+          httpStatusCode: result?.webhook_http_status || null,
+        });
+
+        scheduleExecutionReconciliation({
+          config,
+          context: requestContext,
+          onEvent: (event) => {
+            registerN8nExecutionEvent(event);
+          },
+          onFailure: (error) => {
+            registerN8nStatusEvent({
+              category: "n8n_execution_lookup_failed",
+              title: "Falha ao consultar execucao no n8n",
+              likely_cause: error?.message || "Falha nao identificada ao consultar API do n8n.",
+              suggestion: "Validar N8N_API_BASE_URL/N8N_API_KEY e disponibilidade da API do n8n.",
+              request_id: requestContext.requestId,
+              client: requestContext.client,
+              conversation_id: requestContext.conversationId || null,
+            });
+          },
+        });
+      }
+
       return json(res, 200, result);
     } catch (error) {
       const formatted = toApiErrorResponse(error);
@@ -575,6 +790,127 @@ const server = createServer(async (req, res) => {
     });
   }
 
+  if (req.method === "GET" && pathname === "/api/config/empresas") {
+    try {
+      const result = readCompaniesConfig();
+      return json(res, 200, {
+        success: true,
+        file_path: result.file_path,
+        total: result.empresas.length,
+        empresas: result.empresas,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "companies_read_failed",
+        message: error?.message || "Falha ao ler empresas.json.",
+      });
+    }
+  }
+
+  if (req.method === "PUT" && pathname === "/api/config/empresas") {
+    try {
+      const input = await readJsonBody(req);
+      const result = writeCompaniesConfig(input);
+      return json(res, 200, {
+        success: true,
+        message: "Empresas salvas com sucesso.",
+        file_path: result.file_path,
+        total: result.total,
+        empresas: result.empresas,
+      });
+    } catch (error) {
+      return json(res, 400, {
+        success: false,
+        error: "companies_write_failed",
+        message: error?.message || "Falha ao salvar empresas.json.",
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/pause-status") {
+    try {
+      const input = await readJsonBody(req);
+      const result = await previewPauseStatus({ input, config });
+      return json(res, 200, result);
+    } catch (error) {
+      const formatted = toApiErrorResponse(error);
+      return json(res, formatted.statusCode, formatted.body);
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/n8n/execution/latest") {
+    const client = requestUrl.searchParams.get("client") || "";
+    const requestId = requestUrl.searchParams.get("request_id") || "";
+    const conversationId = requestUrl.searchParams.get("conversation_id") || "";
+    const sync = String(requestUrl.searchParams.get("sync") || "").toLowerCase() === "true";
+
+    let event = getLatestN8nExecutionEvent({
+      client,
+      requestId,
+      conversationId,
+    });
+
+    if (sync && (requestId || client || conversationId)) {
+      try {
+        const reconciled = await reconcileExecutionFromN8n({
+          config,
+          context: {
+            requestId,
+            client,
+            conversationId,
+          },
+          lookbackLimit: config.n8nExecutionLookbackLimit,
+        });
+
+        if (reconciled.ok && reconciled.event) {
+          event = registerN8nExecutionEvent(reconciled.event);
+        } else if (!event) {
+          registerN8nStatusEvent({
+            category: "n8n_execution_not_found",
+            title: "Execucao ainda nao localizada no n8n",
+            likely_cause: "A execucao pode ainda nao ter sido indexada na API do n8n.",
+            suggestion: "Tentar novamente em alguns segundos.",
+            request_id: requestId || null,
+            client: client || null,
+            conversation_id: conversationId || null,
+          });
+        }
+      } catch (error) {
+        registerN8nStatusEvent({
+          category: "n8n_execution_lookup_failed",
+          title: "Falha ao consultar execucao no n8n",
+          likely_cause: error?.message || "Falha nao identificada ao consultar API do n8n.",
+          suggestion: "Validar variaveis de ambiente da API do n8n e tentar novamente.",
+          request_id: requestId || null,
+          client: client || null,
+          conversation_id: conversationId || null,
+        });
+      }
+    }
+
+    return json(res, 200, {
+      success: true,
+      found: Boolean(event),
+      event: event || null,
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/n8n/events") {
+    const client = requestUrl.searchParams.get("client") || "";
+    const limit = Number(requestUrl.searchParams.get("limit") || 20);
+    const events = listRecentN8nEvents({
+      client,
+      limit,
+    });
+
+    return json(res, 200, {
+      success: true,
+      total: events.length,
+      events,
+    });
+  }
+
   if (req.method === "POST" && pathname === "/reprocess") {
     try {
       const input = await readJsonBody(req);
@@ -591,7 +927,7 @@ const server = createServer(async (req, res) => {
   return json(res, 404, {
     error: "not_found",
     message:
-      "Use GET /, GET /reprocessador, GET /empresas, GET /health, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /reprocessador, GET /configuracoes, GET /empresas, GET /health, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/chatwoot/messages, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
 });
 
