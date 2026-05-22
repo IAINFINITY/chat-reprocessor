@@ -4,10 +4,19 @@
 @import url("/assets/css/dashboard/components.css");
 @import url("/assets/css/dashboard/utilities.css");
 
-.config-layout {
-  display: grid;
-  grid-template-columns: 1.35fr 1fr;
-  gap: 18px;
+.supabase-tables-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.supabase-controls {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.supabase-controls .field {
+  min-width: 140px;
 }
 
 .config-row {

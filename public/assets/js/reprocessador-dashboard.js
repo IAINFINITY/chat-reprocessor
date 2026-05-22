@@ -1,4 +1,13 @@
-﻿var state = {
+﻿var COMPANY_LOGOS = {
+  "akila": "/logos/akilalogo.webp",
+  "astro": "/logos/astrologo.png",
+  "clinic-": "/logos/clinicmaislogo.png",
+  "espaco-infinity": "/logos/espacoinfinitylogo.webp",
+  "grupo-botta": "/logos/botta_logo.png",
+  "vai-xora-tintas": "/logos/vaixorartintaslogo.webp",
+};
+
+var state = {
   clients: [],
   previewPayload: null,
   previewClientKey: "",
@@ -47,6 +56,8 @@ var el = {};
   "sWebhook",
   "sPauseStatus",
   "sPauseDetails",
+  "companyLogoArea",
+  "companyLogoImg",
   "summarySection",
   "previewSection",
   "chatPreviewSection",
@@ -554,6 +565,7 @@ function resetPreviewState() {
   state.pauseStatusPreview = null;
   el.executeBtn.disabled = true;
   resetDiagnostic();
+  el.companyLogoArea.classList.remove("is-visible");
   state.currentConversationUrl = "";
   resetChatState();
   renderPauseSummary(null);
@@ -871,6 +883,16 @@ function fillSummary(previewData) {
   el.sWebhook.textContent = safeText(item && item.webhookUrl, "-");
   el.summaryBadge.textContent = conversationId !== "-" ? "#" + conversationId : "-";
   renderPauseSummary(state.pauseStatusPreview);
+
+  var logoPath = COMPANY_LOGOS[state.previewClientKey];
+  if (logoPath) {
+    el.companyLogoArea.classList.add("is-visible");
+    el.companyLogoImg.src = logoPath;
+    el.companyLogoImg.alt = state.previewClientKey;
+
+  } else {
+    el.companyLogoArea.classList.remove("is-visible");
+  }
 }
 
 async function generatePreview() {

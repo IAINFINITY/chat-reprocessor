@@ -3,209 +3,275 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Reprocessador - IA Infinity</title>
+    <title>IA Infinity | Reprocessador</title>
     <link rel="stylesheet" href="/assets/css/reprocessador-dashboard.css" />
   </head>
   <body>
-    <header class="app-header">
-      <div class="app-header-left">
-        <span class="logo-mark" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M3 4h10M3 8h8M3 12h6" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+    <nav class="navbar">
+      <div class="navbar-left">
+        <span class="navbar-logo" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4842 765">
+            <defs>
+              <linearGradient id="lg0" x1="570.3" y1="153.3" x2="1799.1" y2="604.3" gradientUnits="userSpaceOnUse">
+                <stop offset=".1" stop-color="#ee5c29"/>
+                <stop offset=".5" stop-color="#02112a"/>
+                <stop offset=".9" stop-color="#00b7ff"/>
+              </linearGradient>
+              <linearGradient id="lg1" x1="1263.2" y1="384.3" x2="1825.7" y2="384.3" gradientTransform="translate(0 765.9) scale(1 -1)" gradientUnits="userSpaceOnUse">
+                <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+                <stop offset=".6" stop-color="#fff" stop-opacity="0"/>
+                <stop offset=".7" stop-color="#fff" stop-opacity=".2"/>
+                <stop offset=".9" stop-color="#f2f0ef"/>
+              </linearGradient>
+              <linearGradient id="lg2" x1="310.5" x2="873" gradientTransform="translate(1436.4 -2.7) rotate(-180) scale(1 -1)" xlink:href="#lg1"/>
+            </defs>
+            <path fill="var(--fg)" d="M0,603.1h89.3L233.4,227.1l147.3,376h90.7l-172.7-442.7h-126L0,603.1Z"/>
+            <path fill="var(--fg)" d="M4841.1,160.4l-176.7,287.4v155.4h-84.7v-155.4l-176-287.4h96.7l121.3,198.7h1.3l120-198.7h98Z"/>
+            <path fill="var(--fg)" d="M4354.1,160.4v79.3h-168.7v363.4h-84V239.7h-168.7v-79.3h421.4Z"/>
+            <path fill="var(--fg)" d="M3754.4,160.4h84.7v442.7h-84.7V160.4Z"/>
+            <path fill="var(--fg)" d="M3294.1,297.1v306h-84.7V160.4h75.3l261.4,305.4V160.4h84.7v442.7h-76.7l-260-306Z"/>
+            <path fill="var(--fg)" d="M3001.7,160.4h84.7v442.7h-84.7V160.4Z"/>
+            <path fill="var(--fg)" d="M2579.1,421.1v182h-84.7V160.4h404v79.3h-319.4v102h234.7v79.3h-234.7Z"/>
+            <path fill="var(--fg)" d="M2034.2,297.1v306h-84.7V160.4h75.3l261.4,305.4V160.4h84.7v442.7h-76.7l-260-306Z"/>
+            <rect fill="url(#lg0)" x="563.9" y="160.4" width="1257" height="442.4"/>
+            <path fill="url(#lg1)" d="M1825.7,602.8h-562.5V160.4h562.5v442.4Z"/>
+            <path fill="url(#lg2)" d="M563.4,160.4h562.5v442.4h-562.5V160.4Z"/>
+            <path fill="var(--fg)" d="M1536.1,474.3s-260.5-58.3-340.7-12c-80.2,46.3-132,196.8-132,196.8,0,0,30.3-156.3-15.9-236.5-46.3-80.2-196.8-132-196.8-132,0,0,260.5,58.3,340.6,12,80.2-46.3,132-196.8,132-196.8,0,0-30.4,156.3,15.9,236.5,46.3,80.2,196.8,132,196.8,132Z"/>
           </svg>
         </span>
-        <h1>Reprocessador</h1>
+        <span class="navbar-sep"></span>
         <span class="badge">v2.0</span>
       </div>
-      <div class="header-actions">
-        <a href="/configuracoes" class="btn btn-secondary btn-sm">Configurações</a>
-        <button class="theme-toggle" id="themeToggle" aria-label="Alternar tema">
+      <div class="navbar-nav">
+        <a href="/reprocessador" class="active">Reprocessador</a>
+        <a href="/configuracoes">Configurações</a>
+      </div>
+      <div class="navbar-right">
+        <button class="theme-btn" id="themeToggle" aria-label="Alternar tema">
           <span id="themeIcon"></span>
         </button>
       </div>
-    </header>
+    </nav>
 
-    <div class="page-body">
+    <main class="page-body">
       <div class="main-col">
-        <div class="stats-row" id="statsRow">
-          <div class="stat-card anim-card-stats success">
-            <div class="stat-label">Reprocessados</div>
-            <div class="stat-value" id="statSuccess">--</div>
-            <div class="stat-sub">sem dados</div>
-            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+        <div class="section-group" id="operationSection">
+          <div class="section-divider">
+            <h2>Operação</h2>
+            <span class="line"></span>
           </div>
-          <div class="stat-card anim-card-stats error">
-            <div class="stat-label">Com erro</div>
-            <div class="stat-value" id="statErrors">--</div>
-            <div class="stat-sub">sem dados</div>
-            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+
+          <div class="stats-row" id="statsRow">
+            <div class="stat-card anim-card-stats success">
+              <div class="stat-label">Reprocessados</div>
+              <div class="stat-value" id="statSuccess">--</div>
+              <div class="stat-sub">sem dados</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+            <div class="stat-card anim-card-stats error">
+              <div class="stat-label">Com erro</div>
+              <div class="stat-value" id="statErrors">--</div>
+              <div class="stat-sub">sem dados</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+            <div class="stat-card anim-card-stats accent">
+              <div class="stat-label">Pendentes</div>
+              <div class="stat-value" id="statPending">--</div>
+              <div class="stat-sub">sem dados</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+            <div class="stat-card anim-card-stats">
+              <div class="stat-label">Clientes ativos</div>
+              <div class="stat-value" id="statClients">--</div>
+              <div class="stat-sub">sem dados</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
           </div>
-          <div class="stat-card anim-card-stats accent">
-            <div class="stat-label">Pendentes</div>
-            <div class="stat-value" id="statPending">--</div>
-            <div class="stat-sub">sem dados</div>
-            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
-          </div>
-          <div class="stat-card anim-card-stats">
-            <div class="stat-label">Clientes ativos</div>
-            <div class="stat-value" id="statClients">--</div>
-            <div class="stat-sub">sem dados</div>
-            <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
-          </div>
+
+          <section class="card anim-card" id="inputCard">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Nova operação</span>
+            </div>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="conversationUrl">Link da conversa</label>
+                <input id="conversationUrl" type="url" placeholder="https://chat.seudominio.com/app/accounts/12/conversations/7544" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="clientSelect">Cliente / empresa</label>
+                <select id="clientSelect">
+                  <option value="">Detectar automaticamente</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="resolvedClient">Cliente resolvido</label>
+                <input id="resolvedClient" type="text" value="-" disabled />
+              </div>
+              <div class="field">
+                <label for="messageCount">Qtd. de mensagens</label>
+                <input id="messageCount" type="number" min="1" max="20" step="1" value="1" />
+              </div>
+            </div>
+            <div class="company-logo-area" id="companyLogoArea">
+              <img id="companyLogoImg" src="" alt="" />
+            </div>
+            <div class="actions-row">
+              <button id="previewBtn" class="btn btn-primary">Gerar JSON</button>
+              <button id="executeBtn" class="btn btn-secondary" disabled>Reprocessar</button>
+            </div>
+            <div class="status-bar" id="statusBar">
+              <span class="status-dot"></span>
+              <span id="statusText">Carregando clientes...</span>
+            </div>
+          </section>
         </div>
 
-        <section class="card anim-card" id="inputCard">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Nova operação</span>
+        <div class="section-group" id="resultsSection">
+          <div class="section-divider">
+            <h2>Resultado</h2>
+            <span class="line"></span>
           </div>
-          <div class="form-grid">
-            <div class="field full">
-              <label for="conversationUrl">Link da conversa</label>
-              <input id="conversationUrl" type="url" placeholder="https://chat.seudominio.com/app/accounts/12/conversations/7544" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="field">
-              <label for="clientSelect">Cliente / empresa</label>
-              <select id="clientSelect">
-                <option value="">Detectar automaticamente</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="resolvedClient">Cliente resolvido</label>
-              <input id="resolvedClient" type="text" value="-" disabled />
-            </div>
-            <div class="field">
-              <label for="messageCount">Qtd. de mensagens</label>
-              <input id="messageCount" type="number" min="1" max="20" step="1" value="1" />
-            </div>
-          </div>
-          <div class="actions-row">
-            <button id="previewBtn" class="btn btn-primary">Gerar JSON</button>
-            <button id="executeBtn" class="btn btn-secondary" disabled>Reprocessar</button>
-          </div>
-          <div class="status-bar" id="statusBar">
-            <span class="status-dot"></span>
-            <span id="statusText">Carregando clientes...</span>
-          </div>
-        </section>
 
-        <section class="card anim-card" id="summarySection">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Resumo da conversa</span>
-            <span id="summaryBadge" style="font-size:.72rem;padding:3px 10px;border-radius:20px;background:var(--success-soft);color:var(--success);font-weight:500">-</span>
-          </div>
-          <table class="summary-table">
-            <tr><td>Account ID</td><td class="mono" id="sAccount">-</td></tr>
-            <tr><td>Conversa ID</td><td class="mono" id="sConversation">-</td></tr>
-            <tr><td>Contato</td><td class="accent" id="sContact">-</td></tr>
-            <tr><td>Telefone</td><td class="mono" id="sPhone">-</td></tr>
-            <tr><td>Última mensagem</td><td id="sMessage">-</td></tr>
-            <tr><td>Recebida em</td><td id="sReceived">-</td></tr>
-            <tr><td>Cliente detectado</td><td class="accent" id="sDetected">-</td></tr>
-            <tr><td>Webhook destino</td><td class="mono" id="sWebhook" style="font-size:.8rem">-</td></tr>
-            <tr><td>Status Supabase</td><td id="sPauseStatus">-</td></tr>
-            <tr><td>Detalhe pausa</td><td class="mono" id="sPauseDetails" style="font-size:.78rem">-</td></tr>
-          </table>
-        </section>
-
-        <section class="card anim-card" id="previewSection">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>JSON de reprocessamento</span>
-            <button class="card-action" id="copyBtn">Copiar JSON</button>
-          </div>
-          <div class="json-block">
-            <pre id="output">{}</pre>
-          </div>
-        </section>
-
-        <section class="card anim-card" id="chatPreviewSection">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Preview visual da conversa</span>
-            <button class="card-action" id="refreshChatPreviewBtn">Atualizar chat</button>
-          </div>
-          <div class="chat-preview-status" id="chatPreviewStatus">Aguardando preview da conversa...</div>
-          <div class="chat-thread" id="chatPreviewList"></div>
-          <div class="chat-reprocess-outbox">
-            <div class="chat-reprocess-head">
-              <span>Mensagens detectadas após reprocesso</span>
-              <span class="badge" id="chatReprocessBadge">0</span>
+          <section class="card anim-card" id="summarySection">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Resumo da conversa</span>
+              <span id="summaryBadge" style="font-size:.7rem;padding:3px 12px;border-radius:20px;background:var(--success-soft);color:var(--success);font-weight:500;font-family:var(--font-display);letter-spacing:.02em">-</span>
             </div>
-            <div class="chat-thread chat-thread-out" id="chatReprocessList"></div>
-          </div>
-        </section>
-
-        <section class="card anim-card" id="historySection">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Histórico local</span>
-            <span class="card-action" id="refreshHistory" style="cursor:pointer">Atualizar</span>
-          </div>
-          <div class="table-wrap">
-            <table class="history">
-              <thead>
-                <tr>
-                  <th>#</th><th>Conversa</th><th>Cliente</th><th>Status</th><th>Data</th><th>Duração</th>
-                </tr>
-              </thead>
-              <tbody id="historyBody"></tbody>
+            <table class="summary-table">
+              <tr><td>Account ID</td><td class="mono" id="sAccount">-</td></tr>
+              <tr><td>Conversa ID</td><td class="mono" id="sConversation">-</td></tr>
+              <tr><td>Contato</td><td class="accent" id="sContact">-</td></tr>
+              <tr><td>Telefone</td><td class="mono" id="sPhone">-</td></tr>
+              <tr><td>Última mensagem</td><td id="sMessage">-</td></tr>
+              <tr><td>Recebida em</td><td id="sReceived">-</td></tr>
+              <tr><td>Cliente detectado</td><td class="accent" id="sDetected">-</td></tr>
+              <tr><td>Webhook destino</td><td class="mono" id="sWebhook" style="font-size:.8rem">-</td></tr>
+              <tr><td>Status Supabase</td><td id="sPauseStatus">-</td></tr>
+              <tr><td>Detalhe pausa</td><td class="mono" id="sPauseDetails" style="font-size:.78rem">-</td></tr>
             </table>
-          </div>
-          <div class="pagination" id="historyPagination"></div>
-        </section>
+          </section>
 
-        <section class="diagnostic-panel" id="diagnosticPanel">
-          <div class="diag-header">Diagnóstico</div>
-          <div class="diag-grid">
-            <div class="diag-item"><span class="lbl">Código</span><span class="val" id="dCode">-</span></div>
-            <div class="diag-item"><span class="lbl">Título</span><span class="val" id="dTitle">-</span></div>
-            <div class="diag-item"><span class="lbl">Causa</span><span class="val" id="dCause">-</span></div>
-            <div class="diag-item"><span class="lbl">Sugestão</span><span class="val" id="dSuggestion">-</span></div>
-            <div class="diag-item"><span class="lbl">Request ID</span><span class="val mono" id="dRequest">-</span></div>
-            <div class="diag-item"><span class="lbl">Fluxo n8n</span><span class="val" id="dWorkflow">-</span></div>
-            <div class="diag-item"><span class="lbl">Nó com erro</span><span class="val" id="dNode">-</span></div>
-            <div class="diag-item"><span class="lbl">Execução</span><span class="val" id="dExecution">-</span></div>
-            <div class="diag-item full"><span class="lbl">Mensagem do fluxo</span><span class="val" id="dFlowMessage">-</span></div>
-            <div class="diag-item full"><span class="lbl">Upstream</span><span class="val" id="dUpstream">-</span></div>
-          </div>
-          <div class="actions-row" style="margin-top:14px">
-            <button id="n8nLookupBtn" class="btn btn-ghost btn-sm" disabled>Buscar status no fluxo</button>
-            <button id="clearDiagnosticBtn" class="btn btn-ghost btn-sm">Limpar</button>
-          </div>
-        </section>
-      </div>
+          <section class="card anim-card" id="previewSection">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>JSON de reprocessamento</span>
+              <button class="card-action" id="copyBtn">Copiar JSON</button>
+            </div>
+            <div class="json-block">
+              <pre id="output">{}</pre>
+            </div>
+          </section>
 
-      <div class="side-col">
-        <section class="card anim-side">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Atividade</span>
+          <section class="card anim-card" id="chatPreviewSection">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Preview visual da conversa</span>
+              <button class="card-action" id="refreshChatPreviewBtn">Atualizar chat</button>
+            </div>
+            <div class="chat-preview-status" id="chatPreviewStatus">Aguardando preview da conversa...</div>
+            <div class="chat-thread" id="chatPreviewList"></div>
+            <div class="chat-reprocess-outbox">
+              <div class="chat-reprocess-head">
+                <span>Mensagens detectadas após reprocesso</span>
+                <span class="badge" id="chatReprocessBadge">0</span>
+              </div>
+              <div class="chat-thread chat-thread-out" id="chatReprocessList"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="section-group" id="historySectionGroup">
+          <div class="section-divider">
+            <h2>Histórico &amp; Diagnóstico</h2>
+            <span class="line"></span>
           </div>
-          <div class="activity-feed" id="activityFeed"></div>
-        </section>
-        <section class="card anim-side">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Timeline n8n</span>
-            <button class="card-action" id="refreshN8nEventsBtn">Atualizar</button>
+
+          <section class="card anim-card" id="historySection">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Histórico local</span>
+              <span class="card-action" id="refreshHistory" style="cursor:pointer">Atualizar</span>
+            </div>
+            <div class="table-wrap">
+              <table class="history">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Conversa</th><th>Cliente</th><th>Status</th><th>Data</th><th>Duração</th>
+                  </tr>
+                </thead>
+                <tbody id="historyBody"></tbody>
+              </table>
+            </div>
+            <div class="pagination" id="historyPagination"></div>
+          </section>
+
+          <section class="diagnostic-panel" id="diagnosticPanel">
+            <div class="diag-header">Diagnóstico</div>
+            <div class="diag-grid">
+              <div class="diag-item"><span class="lbl">Código</span><span class="val" id="dCode">-</span></div>
+              <div class="diag-item"><span class="lbl">Título</span><span class="val" id="dTitle">-</span></div>
+              <div class="diag-item"><span class="lbl">Causa</span><span class="val" id="dCause">-</span></div>
+              <div class="diag-item"><span class="lbl">Sugestão</span><span class="val" id="dSuggestion">-</span></div>
+              <div class="diag-item"><span class="lbl">Request ID</span><span class="val mono" id="dRequest">-</span></div>
+              <div class="diag-item"><span class="lbl">Fluxo n8n</span><span class="val" id="dWorkflow">-</span></div>
+              <div class="diag-item"><span class="lbl">Nó com erro</span><span class="val" id="dNode">-</span></div>
+              <div class="diag-item"><span class="lbl">Execução</span><span class="val" id="dExecution">-</span></div>
+              <div class="diag-item full"><span class="lbl">Mensagem do fluxo</span><span class="val" id="dFlowMessage">-</span></div>
+              <div class="diag-item full"><span class="lbl">Upstream</span><span class="val" id="dUpstream">-</span></div>
+            </div>
+            <div class="actions-row" style="margin-top:14px">
+              <button id="n8nLookupBtn" class="btn btn-ghost btn-sm" disabled>Buscar status no fluxo</button>
+              <button id="clearDiagnosticBtn" class="btn btn-ghost btn-sm">Limpar</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="section-group" id="activitySectionGroup">
+          <div class="section-divider">
+            <h2>Atividade</h2>
+            <span class="line"></span>
           </div>
-          <div class="timeline-toolbar">
-            <select id="n8nTypeFilter" class="timeline-control">
-              <option value="all">Todos</option>
-              <option value="success">Sucesso</option>
-              <option value="error">Erro</option>
-              <option value="running">Em andamento</option>
-              <option value="info">Info</option>
-            </select>
-            <input
-              id="n8nRequestFilter"
-              class="timeline-control"
-              type="text"
-              placeholder="Buscar por request_id"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <button class="card-action" id="clearN8nFiltersBtn">Limpar filtro</button>
+          <section class="card anim-card">
+            <div class="activity-feed" id="activityFeed"></div>
+          </section>
+        </div>
+
+        <div class="section-group" id="n8nSectionGroup">
+          <div class="section-divider">
+            <h2>Timeline n8n</h2>
+            <span class="line"></span>
           </div>
-          <div class="timeline-feed" id="n8nEventsFeed"></div>
-        </section>
+          <section class="card anim-card">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Eventos</span>
+              <button class="card-action" id="refreshN8nEventsBtn">Atualizar</button>
+            </div>
+            <div class="timeline-toolbar">
+              <select id="n8nTypeFilter" class="timeline-control">
+                <option value="all">Todos</option>
+                <option value="success">Sucesso</option>
+                <option value="error">Erro</option>
+                <option value="running">Em andamento</option>
+                <option value="info">Info</option>
+              </select>
+              <input
+                id="n8nRequestFilter"
+                class="timeline-control"
+                type="text"
+                placeholder="Buscar por request_id"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button class="card-action" id="clearN8nFiltersBtn">Limpar filtro</button>
+            </div>
+            <div class="timeline-feed" id="n8nEventsFeed"></div>
+          </section>
+        </div>
       </div>
-    </div>
+    </main>
+
+    <footer class="app-footer">
+      <span class="footer-left">Dev by <strong>IA Infinity</strong></span>
+      <span class="footer-center">© 2026 IA Infinity</span>
+      <span class="footer-right"></span>
+    </footer>
 
     <script defer src="/assets/js/theme-toggle.js"></script>
     <script defer src="/assets/js/reprocessador-dashboard.js"></script>

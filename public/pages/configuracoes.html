@@ -3,70 +3,123 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Configurações - IA Infinity</title>
+    <title>IA Infinity | Reprocessador</title>
     <link rel="stylesheet" href="/assets/css/configuracoes-dashboard.css" />
   </head>
   <body>
-    <header class="app-header">
-      <div class="app-header-left">
-        <span class="logo-mark" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M3 4h10M3 8h8M3 12h6" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+    <nav class="navbar">
+      <div class="navbar-left">
+        <span class="navbar-logo" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4842 765">
+            <defs>
+              <linearGradient id="lg0" x1="570.3" y1="153.3" x2="1799.1" y2="604.3" gradientUnits="userSpaceOnUse">
+                <stop offset=".1" stop-color="#ee5c29"/>
+                <stop offset=".5" stop-color="#02112a"/>
+                <stop offset=".9" stop-color="#00b7ff"/>
+              </linearGradient>
+              <linearGradient id="lg1" x1="1263.2" y1="384.3" x2="1825.7" y2="384.3" gradientTransform="translate(0 765.9) scale(1 -1)" gradientUnits="userSpaceOnUse">
+                <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+                <stop offset=".6" stop-color="#fff" stop-opacity="0"/>
+                <stop offset=".7" stop-color="#fff" stop-opacity=".2"/>
+                <stop offset=".9" stop-color="#f2f0ef"/>
+              </linearGradient>
+              <linearGradient id="lg2" x1="310.5" x2="873" gradientTransform="translate(1436.4 -2.7) rotate(-180) scale(1 -1)" xlink:href="#lg1"/>
+            </defs>
+            <path fill="var(--fg)" d="M0,603.1h89.3L233.4,227.1l147.3,376h90.7l-172.7-442.7h-126L0,603.1Z"/>
+            <path fill="var(--fg)" d="M4841.1,160.4l-176.7,287.4v155.4h-84.7v-155.4l-176-287.4h96.7l121.3,198.7h1.3l120-198.7h98Z"/>
+            <path fill="var(--fg)" d="M4354.1,160.4v79.3h-168.7v363.4h-84V239.7h-168.7v-79.3h421.4Z"/>
+            <path fill="var(--fg)" d="M3754.4,160.4h84.7v442.7h-84.7V160.4Z"/>
+            <path fill="var(--fg)" d="M3294.1,297.1v306h-84.7V160.4h75.3l261.4,305.4V160.4h84.7v442.7h-76.7l-260-306Z"/>
+            <path fill="var(--fg)" d="M3001.7,160.4h84.7v442.7h-84.7V160.4Z"/>
+            <path fill="var(--fg)" d="M2579.1,421.1v182h-84.7V160.4h404v79.3h-319.4v102h234.7v79.3h-234.7Z"/>
+            <path fill="var(--fg)" d="M2034.2,297.1v306h-84.7V160.4h75.3l261.4,305.4V160.4h84.7v442.7h-76.7l-260-306Z"/>
+            <rect fill="url(#lg0)" x="563.9" y="160.4" width="1257" height="442.4"/>
+            <path fill="url(#lg1)" d="M1825.7,602.8h-562.5V160.4h562.5v442.4Z"/>
+            <path fill="url(#lg2)" d="M563.4,160.4h562.5v442.4h-562.5V160.4Z"/>
+            <path fill="var(--fg)" d="M1536.1,474.3s-260.5-58.3-340.7-12c-80.2,46.3-132,196.8-132,196.8,0,0,30.3-156.3-15.9-236.5-46.3-80.2-196.8-132-196.8-132,0,0,260.5,58.3,340.6,12,80.2-46.3,132-196.8,132-196.8,0,0-30.4,156.3,15.9,236.5,46.3,80.2,196.8,132,196.8,132Z"/>
           </svg>
         </span>
-        <h1>Configurações</h1>
+        <span class="navbar-sep"></span>
         <span class="badge">empresas.json</span>
       </div>
-      <div class="header-actions">
-        <a href="/reprocessador" class="btn btn-secondary">Voltar ao Reprocessador</a>
-        <button class="theme-toggle" id="themeToggle" aria-label="Alternar tema">
+      <div class="navbar-nav">
+        <a href="/reprocessador">Reprocessador</a>
+        <a href="/configuracoes" class="active">Configurações</a>
+      </div>
+      <div class="navbar-right">
+        <button class="theme-btn" id="themeToggle" aria-label="Alternar tema">
           <span id="themeIcon"></span>
         </button>
       </div>
-    </header>
+    </nav>
 
-    <div class="page-body">
+    <main class="page-body">
       <div class="main-col">
-        <section class="card anim-card">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Empresas</span>
-            <button id="addCompanyBtn" class="btn btn-secondary btn-sm">Adicionar empresa</button>
+        <div class="section-group">
+          <div class="section-divider">
+            <h2>Tabelas Supabase</h2>
+            <span class="line"></span>
           </div>
-          <div id="companiesContainer"></div>
-          <div class="actions-row" style="margin-top:16px">
-            <button id="saveCompaniesBtn" class="btn btn-primary">Salvar empresas.json</button>
-            <button id="reloadCompaniesBtn" class="btn btn-secondary">Recarregar arquivo</button>
-          </div>
-          <div id="saveFeedback" class="config-feedback"></div>
-          <div class="status-bar" id="statusBar">
-            <span class="status-dot"></span>
-            <span id="statusText">Carregando configurações...</span>
-          </div>
-        </section>
-      </div>
 
-      <div class="side-col">
-        <section class="card anim-side">
-          <div class="card-header">
-            <span class="card-title"><span class="bar"></span>Tabelas Supabase</span>
+          <section class="card anim-card">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Explorar tabelas</span>
+              <button id="loadTablesBtn" class="btn btn-secondary btn-sm">Atualizar</button>
+            </div>
+            <div class="supabase-tables-layout">
+              <div class="supabase-controls">
+                <div class="field" style="flex:1">
+                  <label>Schema</label>
+                  <input id="schemaInput" type="text" value="public" />
+                </div>
+                <div class="field" style="flex:2">
+                  <label>Filtrar tabela</label>
+                  <input id="tableFilterInput" type="text" placeholder="Nome da tabela..." />
+                </div>
+                <div class="field" style="flex:1">
+                  <label>Aplicar tabela em</label>
+                  <select id="tableTargetCompanySelect"></select>
+                </div>
+              </div>
+              <div class="list-scroll" id="supabaseTablesList"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="section-group">
+          <div class="section-divider">
+            <h2>Empresas</h2>
+            <span class="line"></span>
           </div>
-          <div class="schema-row">
-            <input id="schemaInput" type="text" value="public" />
-            <button id="loadTablesBtn" class="btn btn-secondary btn-sm">Atualizar</button>
-          </div>
-          <div style="height:10px"></div>
-          <input id="tableFilterInput" type="text" placeholder="Filtrar tabela..." />
-          <div style="height:10px"></div>
-          <label for="tableTargetCompanySelect" style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Aplicar tabela em:</label>
-          <select id="tableTargetCompanySelect"></select>
-          <div style="height:10px"></div>
-          <div class="list-scroll" id="supabaseTablesList"></div>
-        </section>
+
+          <section class="card anim-card">
+            <div class="card-header">
+              <span class="card-title"><span class="bar"></span>Cadastro de empresas</span>
+              <button id="addCompanyBtn" class="btn btn-secondary btn-sm">Adicionar empresa</button>
+            </div>
+            <div id="companiesContainer"></div>
+            <div class="actions-row" style="margin-top:16px">
+              <button id="saveCompaniesBtn" class="btn btn-primary">Salvar empresas.json</button>
+              <button id="reloadCompaniesBtn" class="btn btn-secondary">Recarregar arquivo</button>
+            </div>
+            <div id="saveFeedback" class="config-feedback"></div>
+            <div class="status-bar" id="statusBar">
+              <span class="status-dot"></span>
+              <span id="statusText">Carregando configurações...</span>
+            </div>
+          </section>
+        </div>
       </div>
-    </div>
-    <datalist id="supabaseTablesDatalist"></datalist>
+    </main>
+
+    <footer class="app-footer">
+      <span class="footer-left">Dev by <strong>IA Infinity</strong></span>
+      <span class="footer-center">© 2026 IA Infinity</span>
+      <span class="footer-right"></span>
+    </footer>
 
     <script defer src="/assets/js/theme-toggle.js"></script>
     <script defer src="/assets/js/configuracoes-dashboard.js"></script>
+    <datalist id="supabaseTablesDatalist"></datalist>
   </body>
 </html>
