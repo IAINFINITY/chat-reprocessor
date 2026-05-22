@@ -145,6 +145,29 @@
         min-width: 165px;
       }
 
+      .diagnostic {
+        margin-top: 14px;
+        border: 1px solid #f0c18c;
+        border-radius: 10px;
+        padding: 12px;
+        background: #fff8ef;
+      }
+
+      .diagnostic h2 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+      }
+
+      .diagnostic-item {
+        margin: 4px 0;
+        font-size: 0.92rem;
+      }
+
+      .diagnostic-item strong {
+        display: inline-block;
+        min-width: 130px;
+      }
+
       pre {
         margin-top: 14px;
         background: #101924;
@@ -218,6 +241,25 @@
           <div class="summary-item"><strong>Ultima msg usuario:</strong> <span id="sMessage">-</span></div>
         </section>
 
+        <section class="diagnostic" id="diagnosticBox" hidden>
+          <h2>Diagnostico de erro</h2>
+          <div class="diagnostic-item"><strong>Codigo:</strong> <span id="dCode">-</span></div>
+          <div class="diagnostic-item"><strong>Titulo:</strong> <span id="dTitle">-</span></div>
+          <div class="diagnostic-item"><strong>Causa:</strong> <span id="dCause">-</span></div>
+          <div class="diagnostic-item"><strong>Sugestao:</strong> <span id="dSuggestion">-</span></div>
+          <div class="diagnostic-item"><strong>Upstream:</strong> <span id="dUpstream">-</span></div>
+          <div class="diagnostic-item"><strong>Request ID:</strong> <span id="dRequest">-</span></div>
+          <div class="diagnostic-item"><strong>Fluxo n8n:</strong> <span id="dWorkflow">-</span></div>
+          <div class="diagnostic-item"><strong>No com erro:</strong> <span id="dNode">-</span></div>
+          <div class="diagnostic-item"><strong>Execucao:</strong> <span id="dExecution">-</span></div>
+          <div class="diagnostic-item"><strong>Mensagem fluxo:</strong> <span id="dFlowMessage">-</span></div>
+          <div class="actions">
+            <button id="n8nLookupBtn" class="secondary" type="button" disabled>
+              Buscar status no fluxo
+            </button>
+          </div>
+        </section>
+
         <pre id="output">{}</pre>
       </section>
     </main>
@@ -236,10 +278,26 @@
       const sPhoneEl = document.getElementById("sPhone");
       const sMessageEl = document.getElementById("sMessage");
       const messageCountEl = document.getElementById("messageCount");
+      const diagnosticBoxEl = document.getElementById("diagnosticBox");
+      const dCodeEl = document.getElementById("dCode");
+      const dTitleEl = document.getElementById("dTitle");
+      const dCauseEl = document.getElementById("dCause");
+      const dSuggestionEl = document.getElementById("dSuggestion");
+      const dUpstreamEl = document.getElementById("dUpstream");
+      const dRequestEl = document.getElementById("dRequest");
+      const dWorkflowEl = document.getElementById("dWorkflow");
+      const dNodeEl = document.getElementById("dNode");
+      const dExecutionEl = document.getElementById("dExecution");
+      const dFlowMessageEl = document.getElementById("dFlowMessage");
+      const n8nLookupBtnEl = document.getElementById("n8nLookupBtn");
 
       let clients = [];
       let previewPayload = null;
       let previewClientKey = "";
+      let lastDiagnosticContext = null;
+      let monitorTimer = null;
+      let monitorStartedAt = 0;
+      let monitorBusy = false;
 
       function setStatus(message, isError = false) {
         statusEl.textContent = message;
@@ -252,6 +310,175 @@
         sContactEl.textContent = "-";
         sPhoneEl.textContent = "-";
         sMessageEl.textContent = "-";
+      }
+
+      function resetDiagnostic() {
+        diagnosticBoxEl.hidden = true;
+        lastDiagnosticContext = null;
+        n8nLookupBtnEl.disabled = true;
+        stopPostExecuteMonitor();
+        dCodeEl.textContent = "-";
+        dTitleEl.textContent = "-";
+        dCauseEl.textContent = "-";
+        dSuggestionEl.textContent = "-";
+        dUpstreamEl.textContent = "-";
+        dRequestEl.textContent = "-";
+        dWorkflowEl.textContent = "-";
+        dNodeEl.textContent = "-";
+        dExecutionEl.textContent = "-";
+        dFlowMessageEl.textContent = "-";
+      }
+
+      function stopPostExecuteMonitor() {
+        if (monitorTimer) {
+          clearInterval(monitorTimer);
+          monitorTimer = null;
+        }
+        monitorBusy = false;
+        monitorStartedAt = 0;
+      }
+
+      function startPostExecuteMonitor() {
+        stopPostExecuteMonitor();
+
+        if (!lastDiagnosticContext) {
+          return;
+        }
+
+        monitorStartedAt = Date.now();
+        const maxMs = 3 * 60 * 1000;
+        const intervalMs = 8000;
+
+        monitorTimer = setInterval(async () => {
+          if (monitorBusy) {
+            return;
+          }
+
+          if (Date.now() - monitorStartedAt > maxMs) {
+            stopPostExecuteMonitor();
+            return;
+          }
+
+          monitorBusy = true;
+          try {
+            const errorEvent = await fetchLatestN8nError({ attempts: 1, delayMs: 200, silent: true });
+            if (errorEvent) {
+              setStatus(
+                `Erro detectado no fluxo: ${errorEvent.title || errorEvent.category}.`,
+                true,
+              );
+              stopPostExecuteMonitor();
+              return;
+            }
+
+            const statusEvent = await fetchLatestN8nStatus({ attempts: 1, delayMs: 200, silent: true });
+            if (statusEvent) {
+              setStatus(
+                `Status detectado no fluxo: ${statusEvent.title || statusEvent.category}.`,
+                true,
+              );
+            }
+          } finally {
+            monitorBusy = false;
+          }
+        }, intervalMs);
+      }
+
+      function wait(ms) {
+        return new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        });
+      }
+
+      function getConversationIdFromPreviewPayload() {
+        const item = Array.isArray(previewPayload) ? previewPayload[0] : null;
+        const body = item?.body || {};
+        return String(body?.conversation_id || body?.id || "").trim();
+      }
+
+      function setDiagnosticContext(errorResponse) {
+        const details = errorResponse?.details || {};
+        const requestId = String(details?.request_id || errorResponse?.request_id || "").trim();
+        const client = String(details?.client || previewClientKey || "").trim();
+        const conversationId = getConversationIdFromPreviewPayload();
+
+        if (!requestId && !client && !conversationId) {
+          lastDiagnosticContext = null;
+          n8nLookupBtnEl.disabled = true;
+          return;
+        }
+
+        lastDiagnosticContext = {
+          requestId,
+          client,
+          conversationId,
+        };
+        n8nLookupBtnEl.disabled = false;
+      }
+
+      function fillN8nDiagnostic(event) {
+        if (!event || typeof event !== "object") {
+          return;
+        }
+
+        diagnosticBoxEl.hidden = false;
+        dWorkflowEl.textContent = event?.workflow_name || "-";
+        dNodeEl.textContent = event?.failed_node || "-";
+        dExecutionEl.textContent = event?.execution_id || "-";
+        dFlowMessageEl.textContent =
+          event?.error_description || event?.error_message || event?.upstream_messages?.[0] || "-";
+        dUpstreamEl.textContent =
+          event?.upstream_messages?.[0] || event?.error_message || dUpstreamEl.textContent || "-";
+
+        if (event?.category) {
+          const codeText = String(dCodeEl.textContent || "");
+          if (!codeText.includes(event.category)) {
+            dCodeEl.textContent = codeText === "-" ? event.category : `${codeText} | ${event.category}`;
+          }
+        }
+
+        if (event?.title) {
+          dTitleEl.textContent = event.title;
+        }
+
+        if (event?.likely_cause) {
+          dCauseEl.textContent = event.likely_cause;
+        }
+
+        if (event?.suggestion) {
+          dSuggestionEl.textContent = event.suggestion;
+        }
+      }
+
+      function fillDiagnostic(errorResponse) {
+        const details = errorResponse?.details || {};
+        diagnosticBoxEl.hidden = false;
+        dCodeEl.textContent = errorResponse?.error || "-";
+        dTitleEl.textContent = details?.title || "-";
+        dCauseEl.textContent = details?.likely_cause || errorResponse?.message || "-";
+        dSuggestionEl.textContent = details?.suggestion || "-";
+        dUpstreamEl.textContent = details?.upstream_message || details?.error_cause || "-";
+        dRequestEl.textContent = details?.request_id || errorResponse?.request_id || "-";
+        setDiagnosticContext(errorResponse);
+        fillN8nDiagnostic(details?.n8n_event || null);
+      }
+
+      function fillFlowStatus(event) {
+        if (!event || typeof event !== "object") {
+          return;
+        }
+
+        diagnosticBoxEl.hidden = false;
+        dCodeEl.textContent = event?.category || "flow_status";
+        dTitleEl.textContent = event?.title || "Status do fluxo n8n";
+        dCauseEl.textContent = event?.likely_cause || "-";
+        dSuggestionEl.textContent = event?.suggestion || "-";
+        dUpstreamEl.textContent = event?.upstream_messages?.[0] || "-";
+        dRequestEl.textContent = event?.request_id || dRequestEl.textContent || "-";
+        dWorkflowEl.textContent = event?.workflow_name || "-";
+        dNodeEl.textContent = event?.failed_node || "-";
+        dExecutionEl.textContent = event?.execution_id || "-";
+        dFlowMessageEl.textContent = event?.likely_cause || "-";
       }
 
       function fillSummary(data) {
@@ -273,7 +500,121 @@
         resolvedClientEl.value = "-";
         executeBtnEl.disabled = true;
         outputEl.textContent = "{}";
+        stopPostExecuteMonitor();
         resetSummary();
+        resetDiagnostic();
+      }
+
+      async function readJsonSafe(response) {
+        const raw = await response.text();
+        try {
+          return raw ? JSON.parse(raw) : {};
+        } catch {
+          return { success: false, error: "non_json_response", message: raw || "Resposta nao JSON." };
+        }
+      }
+
+      async function fetchLatestN8nError({ attempts = 1, delayMs = 1000, silent = false } = {}) {
+        if (!lastDiagnosticContext) {
+          if (!silent) {
+            setStatus("Nao ha contexto de erro para buscar no n8n.", true);
+          }
+          return null;
+        }
+
+        n8nLookupBtnEl.disabled = true;
+
+        try {
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            const params = new URLSearchParams();
+
+            if (lastDiagnosticContext.requestId) {
+              params.set("request_id", lastDiagnosticContext.requestId);
+            }
+
+            if (lastDiagnosticContext.client) {
+              params.set("client", lastDiagnosticContext.client);
+            }
+
+            if (lastDiagnosticContext.conversationId) {
+              params.set("conversation_id", lastDiagnosticContext.conversationId);
+            }
+
+            const response = await fetch(`/api/reprocess/n8n/errors/latest?${params.toString()}`);
+            const data = await readJsonSafe(response);
+
+            if (response.ok && data?.success && data?.found && data?.event) {
+              fillN8nDiagnostic(data.event);
+              dRequestEl.textContent = data?.event?.request_id || dRequestEl.textContent;
+              if (!silent) {
+                setStatus("Diagnostico atualizado com o erro real do fluxo n8n.", true);
+              }
+              return data.event;
+            }
+
+            if (attempt < attempts) {
+              await wait(delayMs);
+            }
+          }
+
+          if (!silent) {
+            setStatus("Nenhum evento de erro n8n encontrado para este contexto ainda.", true);
+          }
+          return null;
+        } finally {
+          n8nLookupBtnEl.disabled = !lastDiagnosticContext;
+        }
+      }
+
+      async function fetchLatestN8nStatus({ attempts = 1, delayMs = 1000, silent = false } = {}) {
+        if (!lastDiagnosticContext) {
+          if (!silent) {
+            setStatus("Nao ha contexto para buscar status no n8n.", true);
+          }
+          return null;
+        }
+
+        n8nLookupBtnEl.disabled = true;
+
+        try {
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            const params = new URLSearchParams();
+
+            if (lastDiagnosticContext.requestId) {
+              params.set("request_id", lastDiagnosticContext.requestId);
+            }
+
+            if (lastDiagnosticContext.client) {
+              params.set("client", lastDiagnosticContext.client);
+            }
+
+            if (lastDiagnosticContext.conversationId) {
+              params.set("conversation_id", lastDiagnosticContext.conversationId);
+            }
+
+            const response = await fetch(`/api/reprocess/n8n/status/latest?${params.toString()}`);
+            const data = await readJsonSafe(response);
+
+            if (response.ok && data?.success && data?.found && data?.event) {
+              fillFlowStatus(data.event);
+              if (!silent) {
+                setStatus("Status do fluxo n8n encontrado.", true);
+              }
+              return data.event;
+            }
+
+            if (attempt < attempts) {
+              await wait(delayMs);
+            }
+          }
+
+          if (!silent) {
+            setStatus("Nenhum status de fluxo encontrado para este contexto.", true);
+          }
+          return null;
+        } finally {
+          n8nLookupBtnEl.disabled = !lastDiagnosticContext;
+        }
       }
 
       async function loadClients() {
@@ -327,10 +668,13 @@
             }),
           });
 
-          const data = await response.json();
+          const data = await readJsonSafe(response);
           outputEl.textContent = JSON.stringify(data, null, 2);
 
           if (!response.ok || !Array.isArray(data) || data.length === 0) {
+            if (data && typeof data === "object" && !Array.isArray(data)) {
+              fillDiagnostic(data);
+            }
             throw new Error(data?.message || "Falha ao gerar preview.");
           }
 
@@ -354,6 +698,7 @@
             : previewClientKey || "-";
 
           fillSummary(data);
+          resetDiagnostic();
           executeBtnEl.disabled = !previewPayload || !previewClientKey;
           setStatus("Preview gerado com sucesso. Revise o JSON e clique em Reprocessar.");
         } catch (error) {
@@ -370,6 +715,7 @@
         }
 
         executeBtnEl.disabled = true;
+        resetDiagnostic();
         setStatus("Enviando payload para o webhook...");
 
         try {
@@ -382,13 +728,51 @@
             }),
           });
 
-          const data = await response.json();
+          const data = await readJsonSafe(response);
+          outputEl.textContent = JSON.stringify(data, null, 2);
 
           if (!response.ok || !data?.success) {
-            throw new Error(data?.message || "Falha ao executar reprocessamento.");
+            if (data && typeof data === "object") {
+              fillDiagnostic(data);
+            }
+            await fetchLatestN8nError({ attempts: 4, delayMs: 1200, silent: true });
+            setStatus(data?.message || "Falha ao executar reprocessamento.", true);
+            return;
           }
 
-          setStatus(data.message || "Reprocessamento enviado com sucesso.");
+          lastDiagnosticContext = {
+            requestId: String(data?.request_id || "").trim(),
+            client: String(previewClientKey || "").trim(),
+            conversationId: getConversationIdFromPreviewPayload(),
+          };
+          n8nLookupBtnEl.disabled = false;
+          startPostExecuteMonitor();
+
+          if (data?.pause_status) {
+            fillFlowStatus(data.pause_status);
+          }
+
+          if (data?.skipped && data?.status === "paused") {
+            setStatus(data.message || "Contato pausado no Supabase. Reprocessamento nao enviado.", true);
+            return;
+          }
+
+          const statusEvent = await fetchLatestN8nStatus({ attempts: 3, delayMs: 1000, silent: true });
+          const errorEvent = await fetchLatestN8nError({ attempts: 4, delayMs: 1200, silent: true });
+
+          if (errorEvent) {
+            setStatus(
+              `Reprocessamento enviado, mas o fluxo retornou erro: ${errorEvent.title || errorEvent.category}.`,
+              true,
+            );
+          } else if (statusEvent) {
+            setStatus(
+              `Reprocessamento enviado, mas o fluxo retornou status: ${statusEvent.title || statusEvent.category}.`,
+              true,
+            );
+          } else {
+            setStatus(data.message || "Reprocessamento enviado com sucesso.");
+          }
         } catch (error) {
           setStatus(error.message, true);
         } finally {
@@ -404,6 +788,14 @@
       });
       previewBtnEl.addEventListener("click", generatePreview);
       executeBtnEl.addEventListener("click", executeReprocess);
+      n8nLookupBtnEl.addEventListener("click", () => {
+        fetchLatestN8nStatus({ attempts: 1, delayMs: 200, silent: false }).then((statusEvent) => {
+          if (!statusEvent) {
+            return fetchLatestN8nError({ attempts: 1, delayMs: 200, silent: false });
+          }
+          return null;
+        });
+      });
 
       loadClients();
     </script>
