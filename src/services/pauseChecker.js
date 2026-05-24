@@ -195,6 +195,25 @@ function normalizePhoneForCompare(value) {
   return digits;
 }
 
+function buildBrazilianNinthDigitVariants(value) {
+  const raw = normalizePhoneForCompare(value);
+  if (!raw) {
+    return [];
+  }
+
+  const variants = new Set([raw]);
+
+  if (raw.length === 11 && raw[2] === "9") {
+    variants.add(`${raw.slice(0, 2)}${raw.slice(3)}`);
+  }
+
+  if (raw.length === 10) {
+    variants.add(`${raw.slice(0, 2)}9${raw.slice(2)}`);
+  }
+
+  return [...variants];
+}
+
 function buildPhoneCandidates(inputPhone) {
   const raw = String(inputPhone || "").trim();
   const digits = normalizeDigits(raw);
@@ -215,6 +234,14 @@ function buildPhoneCandidates(inputPhone) {
     if (digits.startsWith("55") && digits.length > 11) {
       candidates.push(digits.slice(2));
       candidates.push(`+${digits.slice(2)}`);
+    }
+
+    const normalized = normalizePhoneForCompare(digits);
+    for (const variant of buildBrazilianNinthDigitVariants(normalized)) {
+      candidates.push(variant);
+      candidates.push(`+${variant}`);
+      candidates.push(`55${variant}`);
+      candidates.push(`+55${variant}`);
     }
   }
 
@@ -504,11 +531,16 @@ function findPauseRowByNormalizedPhone({
   phoneColumns,
   candidates,
 }) {
-  const normalizedCandidates = new Set(
-    (candidates || [])
-      .map(normalizePhoneForCompare)
-      .filter(Boolean),
-  );
+  const normalizedCandidates = new Set();
+  for (const candidate of candidates || []) {
+    const normalized = normalizePhoneForCompare(candidate);
+    if (!normalized) {
+      continue;
+    }
+    for (const variant of buildBrazilianNinthDigitVariants(normalized)) {
+      normalizedCandidates.add(variant);
+    }
+  }
 
   if (normalizedCandidates.size === 0) {
     return null;
@@ -526,12 +558,15 @@ function findPauseRowByNormalizedPhone({
         continue;
       }
 
-      if (normalizedCandidates.has(normalizedRowValue)) {
-        return {
-          row,
-          phoneColumn,
-          matchedPhone: normalizedRowValue,
-        };
+      const rowVariants = buildBrazilianNinthDigitVariants(normalizedRowValue);
+      for (const rowVariant of rowVariants) {
+        if (normalizedCandidates.has(rowVariant)) {
+          return {
+            row,
+            phoneColumn,
+            matchedPhone: rowVariant,
+          };
+        }
       }
     }
   }

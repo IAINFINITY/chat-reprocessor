@@ -31,7 +31,13 @@ export function extractIdsFromChatUrl(chatUrl) {
 }
 
 export function resolveConversationIdentity(input, defaultBaseUrl = null) {
-  const parsedFromUrl = extractIdsFromChatUrl(input?.chat_url);
+  const rawUrl =
+    input?.chat_url ||
+    input?.conversationUrl ||
+    input?.conversation_url ||
+    input?.url ||
+    "";
+  const parsedFromUrl = extractIdsFromChatUrl(rawUrl);
 
   const accountId = toNumberOrNull(input?.account_id) ?? parsedFromUrl.accountId;
   const conversationId = toNumberOrNull(input?.conversation_id) ?? parsedFromUrl.conversationId;
@@ -39,7 +45,7 @@ export function resolveConversationIdentity(input, defaultBaseUrl = null) {
 
   if (!accountId || !conversationId) {
     throw new Error(
-      "Nao foi possivel identificar account_id e conversation_id. Envie chat_url valido ou account_id + conversation_id.",
+      "Nao foi possivel identificar account_id e conversation_id. Envie conversationUrl/chat_url valido ou account_id + conversation_id.",
     );
   }
 

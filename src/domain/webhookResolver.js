@@ -66,6 +66,21 @@ function readWebhooksJsonFile() {
     const pauseTable = String(
       empresa?.tabela || empresa?.pause_table || empresa?.tabela_pausar || "",
     ).trim();
+    const rawAccountIds =
+      empresa?.chatwoot_account_ids ??
+      empresa?.account_ids ??
+      empresa?.account_id;
+    const parsedAccountIds = Array.isArray(rawAccountIds)
+      ? rawAccountIds
+      : String(rawAccountIds == null ? "" : rawAccountIds)
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+    const chatwootAccountIds = [...new Set(
+      parsedAccountIds
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    )];
 
     if (!nome || !webhookUrl) {
       continue;
@@ -76,6 +91,7 @@ function readWebhooksJsonFile() {
       nome_normalizado: normalizeName(nome),
       webhookUrl,
       pauseTable,
+      chatwootAccountIds,
     });
   }
 
@@ -87,6 +103,7 @@ export function listWebhookMappings() {
     nome: item.nome,
     webhookUrl: item.webhookUrl,
     pauseTable: item.pauseTable || "",
+    chatwootAccountIds: Array.isArray(item.chatwootAccountIds) ? item.chatwootAccountIds : [],
   }));
 }
 

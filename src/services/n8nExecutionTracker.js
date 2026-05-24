@@ -106,18 +106,18 @@ function deriveExecutionStatus(execution) {
 
 function mapStatusToTitle(status) {
   if (status === "success") {
-    return "Execucao concluida com sucesso";
+    return "Execução concluída com sucesso";
   }
 
   if (status === "error" || status === "failed" || status === "crashed") {
-    return "Execucao com erro";
+    return "Execução com erro";
   }
 
   if (status === "running" || status === "new" || status === "waiting") {
-    return "Execucao em andamento";
+    return "Execução em andamento";
   }
 
-  return "Status da execucao atualizado";
+  return "Status da execução atualizado";
 }
 
 function mapStatusToCategory(status) {
@@ -180,19 +180,19 @@ function toExecutionStatusEvent(execution, context = {}) {
   const nodesExecuted = countExecutedNodes(executionData);
   const likelyCause =
     status === "success"
-      ? `Fluxo concluido com ${nodesExecuted} no(s) executado(s).`
+      ? `Fluxo concluído com ${nodesExecuted} nó(s) executado(s).`
       : status === "running"
-        ? `Fluxo ainda em andamento (${nodesExecuted} no(s) executado(s) ate agora).`
+        ? `Fluxo ainda em andamento (${nodesExecuted} nó(s) executado(s) até agora).`
         : status === "error" || status === "failed" || status === "crashed"
-          ? "Fluxo falhou durante a execucao."
-          : "A execucao foi localizada, mas sem status conclusivo.";
+          ? "Fluxo falhou durante a execução."
+          : "A execução foi localizada, mas sem status conclusivo.";
 
   const suggestion =
     status === "success"
-      ? "Se o resultado final nao era esperado, abrir a execucao no n8n para validar os dados de entrada."
+      ? "Se o resultado final não era esperado, abrir a execução no n8n para validar os dados de entrada."
       : status === "running"
         ? "Aguardar finalizacao do fluxo ou consultar novamente em alguns segundos."
-        : "Abrir a execucao no n8n e revisar o no com falha.";
+        : "Abrir a execução no n8n e revisar o nó com falha.";
 
   return {
     event_type: "execution",
@@ -239,6 +239,43 @@ function extractExecutionsListPayload(payload) {
   return [];
 }
 
+function toDateMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function toNumericId(value) {
+  const n = Number(String(value || "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function compareMatchingExecutions(left, right) {
+  const leftStatus = deriveExecutionStatus(left);
+  const rightStatus = deriveExecutionStatus(right);
+  const leftFinal = leftStatus === "success" || leftStatus === "error" || leftStatus === "failed" || leftStatus === "crashed";
+  const rightFinal = rightStatus === "success" || rightStatus === "error" || rightStatus === "failed" || rightStatus === "crashed";
+
+  if (leftFinal !== rightFinal) {
+    return leftFinal ? -1 : 1;
+  }
+
+  const leftStopped = toDateMs(left?.stoppedAt || left?.data?.stoppedAt);
+  const rightStopped = toDateMs(right?.stoppedAt || right?.data?.stoppedAt);
+  if (leftStopped !== rightStopped) {
+    return rightStopped - leftStopped;
+  }
+
+  const leftStarted = toDateMs(left?.startedAt || left?.data?.startedAt);
+  const rightStarted = toDateMs(right?.startedAt || right?.data?.startedAt);
+  if (leftStarted !== rightStarted) {
+    return rightStarted - leftStarted;
+  }
+
+  const leftId = toNumericId(left?.id);
+  const rightId = toNumericId(right?.id);
+  return rightId - leftId;
+}
+
 export async function reconcileExecutionFromN8n({
   config,
   context,
@@ -267,7 +304,10 @@ export async function reconcileExecutionFromN8n({
     };
   }
 
-  const matching = executions.find((execution) => matchesExecutionByContext(execution, context));
+  const matchingCandidates = executions
+    .filter((execution) => matchesExecutionByContext(execution, context))
+    .sort(compareMatchingExecutions);
+  const matching = matchingCandidates[0] || null;
   if (!matching) {
     return {
       ok: false,

@@ -69,6 +69,7 @@ const STATIC_CONTENT_TYPES = {
   ".ttf": "font/ttf",
   ".map": "application/json; charset=utf-8",
 };
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 function toApiErrorResponse(error) {
   if (error instanceof ReprocessApiError) {
@@ -79,6 +80,17 @@ function toApiErrorResponse(error) {
         error: error.code,
         message: error.message,
         details: error.details || null,
+      },
+    };
+  }
+
+  if (error?.statusCode && Number.isInteger(error.statusCode)) {
+    return {
+      statusCode: error.statusCode,
+      body: {
+        success: false,
+        error: "request_error",
+        message: error?.message || "Erro de requisicao.",
       },
     };
   }
@@ -174,8 +186,15 @@ function getRequestUrl(req) {
 
 async function readJsonBody(req) {
   const chunks = [];
+  let totalBytes = 0;
 
   for await (const chunk of req) {
+    totalBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+    if (totalBytes > MAX_JSON_BODY_BYTES) {
+      const error = new Error("Payload JSON excede o limite de 1MB.");
+      error.statusCode = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
 
@@ -188,7 +207,9 @@ async function readJsonBody(req) {
   try {
     return JSON.parse(raw);
   } catch {
-    throw new Error("Body JSON invalido.");
+    const error = new Error("Body JSON invalido.");
+    error.statusCode = 400;
+    throw error;
   }
 }
 
@@ -245,6 +266,24 @@ function validateN8nCallbackSecret(req, config) {
   const receivedSecret = Array.isArray(rawValue) ? rawValue[0] : rawValue;
 
   return String(receivedSecret || "").trim() === expectedSecret;
+}
+
+function isStaleRunningExecutionEvent(event, maxAgeMs = 45000) {
+  if (!event || String(event?.event_type || "") !== "execution") {
+    return false;
+  }
+
+  const status = String(event?.status || "").trim().toLowerCase();
+  if (status !== "running" && status !== "new" && status !== "waiting") {
+    return false;
+  }
+
+  const ts = Date.parse(String(event?.received_at || ""));
+  if (!Number.isFinite(ts)) {
+    return false;
+  }
+
+  return Date.now() - ts > maxAgeMs;
 }
 
 function normalizeChatPreviewContent(message) {
@@ -511,10 +550,18 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/api/reprocess/clients") {
-    return json(res, 200, {
-      success: true,
-      clients: listReprocessClients(),
-    });
+    try {
+      return json(res, 200, {
+        success: true,
+        clients: listReprocessClients(),
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "clients_list_failed",
+        message: error?.message || "Falha ao carregar lista de clientes.",
+      });
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/reprocess/supabase/tables") {
@@ -852,8 +899,9 @@ const server = createServer(async (req, res) => {
     });
 
     if (sync && (requestId || client || conversationId)) {
+      let reconciled = null;
       try {
-        const reconciled = await reconcileExecutionFromN8n({
+        reconciled = await reconcileExecutionFromN8n({
           config,
           context: {
             requestId,
@@ -886,6 +934,13 @@ const server = createServer(async (req, res) => {
           client: client || null,
           conversation_id: conversationId || null,
         });
+      }
+
+      if (
+        !reconciled?.ok &&
+        isStaleRunningExecutionEvent(event)
+      ) {
+        event = null;
       }
     }
 

@@ -5,11 +5,38 @@ const DEFAULT_SECRET_HEADER = "x-reprocess-secret";
 const DEFAULT_HMAC_HEADER = "x-reprocess-signature";
 
 function normalizeClientKey(value) {
-  return String(value || "")
+  const normalized = maybeRepairMojibake(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9_-]/g, "");
+    .replace(/[^a-z0-9_+-]/g, "")
+    .replace(/-\+/g, "+")
+    .replace(/\+-/g, "+")
+    .replace(/\++/g, "+")
+    .replace(/-{2,}/g, "-")
+    .replace(/_{2,}/g, "_")
+    .replace(/^[-_]+|[-_]+$/g, "");
+
+  if (normalized === "clinic-") {
+    return "clinic+";
+  }
+
+  return normalized;
+}
+
+function resolveClientKeyAlias(clientKey) {
+  const raw = String(clientKey || "").trim().toLowerCase();
+  if (raw === "clinic" || raw === "clinic-" || raw === "clinic+") {
+    return "clinic+";
+  }
+
+  const normalized = normalizeClientKey(clientKey);
+  if (normalized === "clinic" || normalized === "clinic-" || normalized === "clinic+") {
+    return "clinic+";
+  }
+  return normalized;
 }
 
 function maybeRepairMojibake(value) {
@@ -32,6 +59,13 @@ function normalizeClientName(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toLowerCase();
+}
+
+function tokenizeName(value) {
+  return normalizeClientName(value)
+    .split(/[^a-z0-9]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function toEnvKey(clientKey) {
@@ -181,6 +215,14 @@ function getClientsRegistry(env = process.env) {
       defaultPauseLookupColumns,
     );
 
+    const mappingAccountIds = Array.isArray(mapping.chatwootAccountIds)
+      ? mapping.chatwootAccountIds
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value > 0)
+      : [];
+    const envAccountIds = parseCsvInteger(env[`${envPrefix}CHATWOOT_ACCOUNT_IDS`]);
+    const mergedAccountIds = [...new Set([...mappingAccountIds, ...envAccountIds])];
+
     clients[key] = {
       key,
       name: mapping.nome,
@@ -191,7 +233,7 @@ function getClientsRegistry(env = process.env) {
       webhookHmacHeader: String(env[`${envPrefix}WEBHOOK_HMAC_HEADER`] || DEFAULT_HMAC_HEADER).trim(),
       timeoutMs: parsePositiveInteger(env[`${envPrefix}TIMEOUT_MS`], globalTimeoutMs),
       retryCount: parsePositiveInteger(env[`${envPrefix}RETRY_COUNT`], globalRetryCount),
-      chatwootAccountIds: parseCsvInteger(env[`${envPrefix}CHATWOOT_ACCOUNT_IDS`]),
+      chatwootAccountIds: mergedAccountIds,
       pauseTable: String(mapping.pauseTable || env[`${envPrefix}PAUSE_TABLE`] || "").trim(),
       pauseTableSource: String(mapping.pauseTable || "").trim() ? "json" : "env",
       pauseSchema: String(env[`${envPrefix}PAUSE_SCHEMA`] || defaultPauseSchema).trim(),
@@ -227,12 +269,13 @@ export function listReprocessClients() {
 }
 
 export function getReprocessClient(clientKey) {
-  const normalized = normalizeClientKey(clientKey);
+  const normalized = resolveClientKeyAlias(clientKey);
   if (!normalized) {
     return null;
   }
 
-  return getClientsRegistry()[normalized] || null;
+  const clients = getClientsRegistry();
+  return clients[normalized] || null;
 }
 
 export function detectReprocessClientByAccountId(accountId) {
@@ -253,11 +296,44 @@ export function detectReprocessClientByAccountName(accountName) {
     return null;
   }
 
-  return (
-    Object.values(getClientsRegistry()).find(
-      (client) => normalizeClientName(client.name) === normalizedName,
-    ) || null
+  const clients = Object.values(getClientsRegistry());
+
+  const exact = clients.find(
+    (client) => normalizeClientName(client.name) === normalizedName,
   );
+  if (exact) {
+    return exact;
+  }
+
+  const tokens = tokenizeName(normalizedName);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  let bestClient = null;
+  let bestScore = 0;
+  for (const client of clients) {
+    const clientName = normalizeClientName(client.name);
+    let score = 0;
+    for (const token of tokens) {
+      if (token.length <= 1) {
+        continue;
+      }
+      if (clientName.includes(token)) {
+        score += 1;
+      }
+    }
+
+    if (
+      score > bestScore ||
+      (score === bestScore && score > 0 && clientName.length < normalizeClientName(bestClient?.name).length)
+    ) {
+      bestScore = score;
+      bestClient = client;
+    }
+  }
+
+  return bestScore > 0 ? bestClient : null;
 }
 
 export function buildClientPayload(clientConfig, context) {

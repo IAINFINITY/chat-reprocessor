@@ -10,6 +10,21 @@ function toLower(value) {
   return String(value || "").toLowerCase();
 }
 
+function normalizeClientAlias(value) {
+  const normalized = toLower(value).trim();
+  if (normalized === "clinic-") {
+    return "clinic+";
+  }
+  return normalized;
+}
+
+function matchesClientFilter(eventClient, filterClient) {
+  if (!String(filterClient || "").trim()) {
+    return true;
+  }
+  return normalizeClientAlias(eventClient) === normalizeClientAlias(filterClient);
+}
+
 function parseTimestampMs(value) {
   const ms = Date.parse(String(value || ""));
   return Number.isFinite(ms) ? ms : 0;
@@ -137,7 +152,7 @@ function buildEventDedupeKey(event) {
   const category = stableEventText(event?.category);
   const requestId = stableEventText(event?.request_id);
   const conversationId = stableEventText(event?.conversation_id);
-  const client = stableEventText(event?.client);
+  const client = stableEventText(normalizeClientAlias(event?.client));
   const executionId = stableEventText(event?.execution_id);
   const status = stableEventText(event?.status);
   const failedNode = stableEventText(event?.failed_node);
@@ -196,8 +211,8 @@ function parseN8nErrorPayload(input) {
 
   let category = "n8n_node_error";
   let title = "Erro no fluxo n8n";
-  let likelyCause = "Um no do workflow falhou durante a execucao.";
-  let suggestion = "Abrir a execucao no n8n e verificar o no com erro.";
+  let likelyCause = "Um nó do workflow falhou durante a execução.";
+  let suggestion = "Abrir a execução no n8n e verificar o nó com erro.";
 
   if (combined.includes("insufficient_quota") || combined.includes("invalid_api_key")) {
     category = "openai_auth_or_quota";
@@ -217,7 +232,7 @@ function parseN8nErrorPayload(input) {
   } else if (combined.includes("supabase") && /(pause|paused|inativ|disabled)/.test(combined)) {
     category = "supabase_ai_paused";
     title = "IA pausada no Supabase";
-    likelyCause = "Regra de negocio bloqueou execucao por IA pausada.";
+    likelyCause = "Regra de negócio bloqueou execução por IA pausada.";
     suggestion = "Reativar IA no Supabase e testar novamente.";
   }
 
@@ -288,9 +303,9 @@ function normalizeExecutionPayload(event) {
     event_type: "execution",
     received_at: new Date().toISOString(),
     category: String(event?.category || "n8n_execution_status").trim(),
-    title: String(event?.title || "Status da execucao n8n").trim(),
-    likely_cause: String(event?.likely_cause || "Status da execucao atualizado via API do n8n.").trim(),
-    suggestion: String(event?.suggestion || "Verificar detalhes da execucao no n8n.").trim(),
+    title: String(event?.title || "Status da execução n8n").trim(),
+    likely_cause: String(event?.likely_cause || "Status da execução atualizado via API do n8n.").trim(),
+    suggestion: String(event?.suggestion || "Verificar detalhes da execução no n8n.").trim(),
     workflow_name: event?.workflow_name || null,
     workflow_id: event?.workflow_id || null,
     execution_id: event?.execution_id || null,
@@ -317,8 +332,8 @@ function buildDispatchStatusEvent(input) {
     received_at: new Date().toISOString(),
     category: "webhook_dispatched",
     title: "Payload enviado ao webhook",
-    likely_cause: "Webhook recebeu a requisicao inicial de reprocessamento.",
-    suggestion: "Aguardar retorno do fluxo ou consultar status da execucao no n8n.",
+    likely_cause: "Webhook recebeu a requisição inicial de reprocessamento.",
+    suggestion: "Aguardar retorno do fluxo ou consultar status da execução no n8n.",
     workflow_name: null,
     workflow_id: null,
     execution_id: null,
@@ -371,7 +386,7 @@ export function registerWebhookDispatchEvent(payload) {
 }
 
 export function getLatestN8nErrorEvent({ client, conversationId, requestId } = {}) {
-  const byClient = toLower(client);
+  const byClient = normalizeClientAlias(client);
   const byConversation = String(conversationId || "").trim();
   const byRequestId = String(requestId || "").trim();
   const maxAgeMs = 10 * 60 * 1000;
@@ -390,7 +405,7 @@ export function getLatestN8nErrorEvent({ client, conversationId, requestId } = {
         return false;
       }
 
-      if (byClient && toLower(event.client) !== byClient) {
+      if (!matchesClientFilter(event.client, byClient)) {
         return false;
       }
 
@@ -411,7 +426,7 @@ export function getLatestN8nErrorEvent({ client, conversationId, requestId } = {
         return false;
       }
 
-      if (byClient && toLower(event.client) !== byClient) {
+      if (!matchesClientFilter(event.client, byClient)) {
         return false;
       }
 
@@ -430,7 +445,7 @@ export function getLatestN8nErrorEvent({ client, conversationId, requestId } = {
 }
 
 export function getLatestN8nStatusEvent({ client, conversationId, requestId } = {}) {
-  const byClient = toLower(client);
+  const byClient = normalizeClientAlias(client);
   const byConversation = String(conversationId || "").trim();
   const byRequestId = String(requestId || "").trim();
 
@@ -448,7 +463,7 @@ export function getLatestN8nStatusEvent({ client, conversationId, requestId } = 
         return false;
       }
 
-      if (byClient && toLower(event.client) !== byClient) {
+      if (!matchesClientFilter(event.client, byClient)) {
         return false;
       }
 
@@ -458,7 +473,7 @@ export function getLatestN8nStatusEvent({ client, conversationId, requestId } = 
 }
 
 export function getLatestN8nExecutionEvent({ client, conversationId, requestId } = {}) {
-  const byClient = toLower(client);
+  const byClient = normalizeClientAlias(client);
   const byConversation = String(conversationId || "").trim();
   const byRequestId = String(requestId || "").trim();
 
@@ -476,7 +491,7 @@ export function getLatestN8nExecutionEvent({ client, conversationId, requestId }
         return false;
       }
 
-      if (byClient && toLower(event.client) !== byClient) {
+      if (!matchesClientFilter(event.client, byClient)) {
         return false;
       }
 
@@ -487,9 +502,9 @@ export function getLatestN8nExecutionEvent({ client, conversationId, requestId }
 
 export function listRecentN8nEvents({ limit = 20, client } = {}) {
   const safeLimit = Math.max(1, Math.min(Number(limit || 20), 100));
-  const byClient = toLower(client);
+  const byClient = normalizeClientAlias(client);
   const source = byClient
-    ? events.filter((event) => toLower(event.client) === byClient)
+    ? events.filter((event) => matchesClientFilter(event.client, byClient))
     : events;
 
   const deduped = [];

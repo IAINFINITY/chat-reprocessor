@@ -8,10 +8,24 @@ function getCompaniesFilePath() {
 }
 
 function normalizeRow(input = {}) {
+  const rawAccountIds = input?.chatwoot_account_ids ?? input?.account_ids ?? input?.account_id;
+  const parsedAccountIds = Array.isArray(rawAccountIds)
+    ? rawAccountIds
+    : String(rawAccountIds == null ? "" : rawAccountIds)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+  const normalizedAccountIds = [...new Set(
+    parsedAccountIds
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0),
+  )];
+
   return {
     nome: String(input?.nome || "").trim(),
     url_webhook: String(input?.url_webhook || "").trim(),
     tabela: String(input?.tabela || input?.pause_table || "").trim(),
+    chatwoot_account_ids: normalizedAccountIds,
   };
 }
 
@@ -44,6 +58,7 @@ function validateCompaniesRows(rows) {
     const nome = String(row?.nome || "").trim();
     const webhook = String(row?.url_webhook || "").trim();
     const tabela = String(row?.tabela || "").trim();
+    const accountIds = Array.isArray(row?.chatwoot_account_ids) ? row.chatwoot_account_ids : [];
 
     if (!nome) {
       throw new Error(`Empresa #${line}: campo 'nome' obrigatorio.`);
@@ -64,6 +79,13 @@ function validateCompaniesRows(rows) {
 
     if (!tabela) {
       throw new Error(`Empresa '${nome}': campo 'tabela' obrigatorio.`);
+    }
+
+    for (const accountId of accountIds) {
+      const numeric = Number(accountId);
+      if (!Number.isInteger(numeric) || numeric <= 0) {
+        throw new Error(`Empresa '${nome}': chatwoot_account_ids deve conter apenas inteiros positivos.`);
+      }
     }
 
     const normalizedName = nome.toLowerCase();

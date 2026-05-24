@@ -1,19 +1,14 @@
 ﻿import { readFileSync } from "node:fs";
 
 function parseValue(rawValue) {
-  if (rawValue === "true") {
-    return true;
+  const value = String(rawValue ?? "");
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
   }
-
-  if (rawValue === "false") {
-    return false;
-  }
-
-  if (rawValue !== "" && !Number.isNaN(Number(rawValue))) {
-    return Number(rawValue);
-  }
-
-  return rawValue;
+  return value;
 }
 
 export function loadEnvFile(path = ".env") {
@@ -89,6 +84,10 @@ export function getConfig() {
     n8nExecutionLookbackLimit: Number(process.env.N8N_EXECUTION_LOOKBACK_LIMIT || 40),
     n8nEventStorePath: String(process.env.N8N_EVENT_STORE_PATH || "data/n8n-events.json").trim(),
     n8nEventStoreMaxEvents: Number(process.env.N8N_EVENT_STORE_MAX_EVENTS || 500),
+    configWriteSecret: String(process.env.CONFIG_WRITE_SECRET || "").trim(),
+    configWriteHeader: String(process.env.CONFIG_WRITE_HEADER || "x-config-secret")
+      .trim()
+      .toLowerCase(),
   };
 }
 
