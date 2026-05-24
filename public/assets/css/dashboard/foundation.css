@@ -4,106 +4,115 @@
 @font-face{font-family:'Geist';font-style:normal;font-weight:400 700;font-display:swap;src:url('https://iainfinity.com.br/wp-content/uploads/2026/04/Geist-VariableFont_wght.ttf')format('truetype')}
 
 :root{
-  --bg:oklch(96% 0.004 80);
-  --bg-alt:oklch(98% 0.003 80);
-  --surface:oklch(100% 0 0);
-  --fg:oklch(12% 0.035 260);
-  --fg-secondary:oklch(38% 0.025 260);
-  --muted:oklch(50% 0.015 260);
-  --border:oklch(89% 0.006 80);
-  --border-strong:oklch(82% 0.008 80);
-  --accent:oklch(58% 0.2 35);
-  --accent-hover:oklch(50% 0.19 30);
-  --accent-soft:oklch(58% 0.2 35 / 0.08);
-  --accent-subtle:oklch(58% 0.2 35 / 0.04);
-  --success:oklch(52% 0.14 145);
-  --success-soft:oklch(52% 0.14 145 / 0.08);
-  --error:oklch(50% 0.19 25);
-  --error-soft:oklch(50% 0.19 25 / 0.06);
-  --warning:oklch(60% 0.14 85);
-  --warning-soft:oklch(60% 0.14 85 / 0.08);
+  --orange:oklch(62% 0.18 40);
+  --orange-hover:oklch(52% 0.17 36);
+  --orange-soft:oklch(62% 0.18 40 / 0.12);
+  --orange-subtle:oklch(62% 0.18 40 / 0.06);
+  --bg:oklch(6.5% 0 0);
+  --bg-alt:oklch(9% 0 0);
+  --surface:oklch(11% 0 0);
+  --surface-alt:oklch(13% 0 0);
+  --surface-raised:oklch(15.5% 0 0);
+  --fg:oklch(92% 0.005 75);
+  --fg-secondary:oklch(58% 0 0);
+  --muted:oklch(40% 0 0);
+  --border:oklch(18% 0 0);
+  --border-strong:oklch(35% 0 0);
+  --accent:var(--orange);
+  --accent-hover:var(--orange-hover);
+  --accent-soft:var(--orange-soft);
+  --accent-subtle:var(--orange-subtle);
+  --success:oklch(62% 0.16 145);
+  --success-soft:oklch(62% 0.16 145 / 0.1);
+  --error:oklch(54% 0.2 25);
+  --error-soft:oklch(54% 0.2 25 / 0.1);
+  --warning:oklch(74% 0.14 85);
+  --warning-soft:oklch(74% 0.14 85 / 0.07);
   --radius:8px;
+  --radius-sm:5px;
   --radius-md:10px;
   --radius-lg:14px;
-  --font-display:'Nord','Inter',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
-  --font-body:'Geist','Inter',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --radius-xl:18px;
+  --font-display:'Nord','Inter',-apple-system,system-ui,sans-serif;
+  --font-body:'Geist','Inter',-apple-system,system-ui,sans-serif;
   --font-mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,Menlo,monospace;
-  --shadow-xs:0 1px 2px oklch(0% 0 0 / 0.03);
-  --shadow-sm:0 1px 3px oklch(0% 0 0 / 0.05);
-  --shadow-md:0 4px 14px oklch(0% 0 0 / 0.06);
-  --shadow-lg:0 8px 30px oklch(0% 0 0 / 0.08);
-  --transition:.18s ease;
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --shadow-sm:0 1px 2px oklch(0% 0 0 / .35);
+  --shadow-md:0 4px 14px oklch(0% 0 0 / .4);
+  --shadow-lg:0 8px 30px oklch(0% 0 0 / .45);
+  --sidebar-w:240px;
+  --bounce:cubic-bezier(0.34,1.56,0.64,1);
+  --transition:.18s cubic-bezier(0.4,0,0.2,1);
 }
-@keyframes fadeSlideUp {
-  from { opacity: 0; transform: translateY(18px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeSlideRight {
-  from { opacity: 0; transform: translateX(-14px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-@keyframes countPulse {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.04); }
-}
-@keyframes breathe {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: 0.5; transform: scale(0.85); }
-}
-@keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-@keyframes scalePop {
-  0%   { transform: scale(1); }
-  40%  { transform: scale(1.12); }
-  100% { transform: scale(1); }
-}
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); max-height: 0; padding: 0 16px; }
-  to   { opacity: 1; transform: translateY(0); max-height: 80px; padding: 11px 16px; }
-}
-@keyframes pulseRing {
-  0%   { box-shadow: 0 0 0 0 var(--accent-soft); }
-  70%  { box-shadow: 0 0 0 8px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-[data-theme="dark"]{
-  --bg:oklch(10% 0.012 260);
-  --bg-alt:oklch(12% 0.012 260);
-  --surface:oklch(14% 0.015 260);
-  --fg:oklch(88% 0.01 260);
-  --fg-secondary:oklch(62% 0.015 260);
-  --muted:oklch(52% 0.015 260);
-  --border:oklch(22% 0.015 260);
-  --border-strong:oklch(30% 0.015 260);
-  --accent:oklch(62% 0.2 35);
-  --accent-hover:oklch(56% 0.19 35);
-  --accent-soft:oklch(62% 0.2 35 / 0.12);
-  --accent-subtle:oklch(62% 0.2 35 / 0.06);
-  --success-soft:oklch(52% 0.14 145 / 0.14);
-  --error-soft:oklch(50% 0.19 25 / 0.1);
-  --warning-soft:oklch(60% 0.14 85 / 0.12);
-  --shadow-xs:0 1px 2px oklch(0% 0 0 / 0.2);
-  --shadow-sm:0 1px 3px oklch(0% 0 0 / 0.25);
-  --shadow-md:0 4px 14px oklch(0% 0 0 / 0.3);
-  --shadow-lg:0 8px 30px oklch(0% 0 0 / 0.35);
+[data-theme="light"]{
+  --bg:oklch(96% 0.004 265);
+  --bg-alt:oklch(97.5% 0.003 265);
+  --surface:oklch(100% 0 0);
+  --surface-alt:oklch(98.5% 0.003 265);
+  --surface-raised:oklch(100% 0 0);
+  --fg:oklch(14% 0.015 265);
+  --fg-secondary:oklch(42% 0.015 265);
+  --muted:oklch(48% 0.012 265);
+  --border:oklch(88% 0.008 265);
+  --border-strong:oklch(58% 0.015 265);
+  --accent:var(--orange);
+  --accent-hover:oklch(48% 0.17 36);
+  --accent-soft:oklch(62% 0.18 40 / 0.09);
+  --accent-subtle:oklch(62% 0.18 40 / 0.04);
+  --success:oklch(48% 0.16 145);
+  --success-soft:oklch(48% 0.16 145 / 0.08);
+  --error:oklch(48% 0.22 25);
+  --error-soft:oklch(48% 0.22 25 / 0.08);
+  --warning:oklch(74% 0.16 85);
+  --warning-soft:oklch(74% 0.16 85 / 0.12);
+  --shadow-sm:0 1px 2px oklch(0% 0 0 / .06);
+  --shadow-md:0 4px 14px oklch(0% 0 0 / .08);
+  --shadow-lg:0 8px 30px oklch(0% 0 0 / .1);
 }
 
+@keyframes fadeIn{from{opacity:0}}
+@keyframes fadeInUp{from{opacity:0;transform:translateY(16px)}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(.94)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}}
+@keyframes slideRight{from{opacity:0;transform:translateX(-12px)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes pulseGlow{0%,100%{box-shadow:0 0 6px var(--accent-soft)}50%{box-shadow:0 0 18px var(--accent-soft),0 0 32px var(--accent-subtle)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes countUp{from{opacity:0;transform:translateY(6px)}}
+@keyframes statusBarIn{from{max-height:0;padding:0 14px;opacity:0}to{max-height:60px;padding:10px 14px;opacity:1}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@keyframes themeFlash{0%{opacity:1}40%{opacity:.7}100%{opacity:1}}
+@keyframes staggerIn{0%{opacity:0;transform:translateY(18px) scale(.97)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+@keyframes confettiFall{0%{transform:translateY(-10px) rotate(0deg);opacity:1}100%{transform:translateY(300px) rotate(720deg);opacity:0}}
+@keyframes counterBounce{0%{transform:scale(1)}50%{transform:scale(1.25)}100%{transform:scale(1)}}
+@keyframes skeletonShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{font-size:16px}
+html{font-size:14.5px;scroll-behavior:smooth}
 body{
-  font-family:var(--font-body);
-  background:var(--bg);
-  color:var(--fg);
-  line-height:1.55;
-  min-height:100vh;
+  font-family:var(--font-body);background:var(--bg);color:var(--fg);
+  line-height:1.55;min-height:100vh;overflow-x:hidden;
   -webkit-font-smoothing:antialiased;
-  -moz-osx-font-smoothing:grayscale;
+  transition:background .2s ease,color .2s ease;
 }
-::-webkit-scrollbar{width:6px;height:6px}
+body.theme-flash{animation:themeFlash .25s ease}
+::selection{background:var(--accent-soft);color:var(--fg)}
+::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--border-strong)}
+
+@media (prefers-reduced-motion: reduce){
+  html:not([data-motion="full"]){scroll-behavior:auto}
+  html:not([data-motion="full"]) *,html:not([data-motion="full"]) *::before,html:not([data-motion="full"]) *::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+  html:not([data-motion="full"]) .stagger-fade{
+    animation:none !important;
+    opacity:1 !important;
+    transform:none !important;
+  }
+}

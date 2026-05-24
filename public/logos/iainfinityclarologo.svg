@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="Layer_1" version="1.1" viewBox="0 0 896 122">
+  <defs>
+    <style>
+      .st0 {
+        fill: #001536;
+      }
+
+      .st1 {
+        fill: url(#linear-gradient);
+      }
+    </style>
+    <linearGradient id="linear-gradient" x1="148.8" y1="44.7" x2="253.2" y2="73.7" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ec5c2a"></stop>
+      <stop offset="0" stop-color="#e55a2a"></stop>
+      <stop offset=".1" stop-color="#d3542b"></stop>
+      <stop offset=".2" stop-color="#b64b2c"></stop>
+      <stop offset=".3" stop-color="#8d3f2e"></stop>
+      <stop offset=".4" stop-color="#582f31"></stop>
+      <stop offset=".5" stop-color="#191c34"></stop>
+      <stop offset=".5" stop-color="#001536"></stop>
+      <stop offset=".7" stop-color="#225f8a"></stop>
+      <stop offset="1" stop-color="#46afe3"></stop>
+    </linearGradient>
+  </defs>
+  <path class="st0" d="M895.1,16.9l-35.2,57.2v30.9h-16.8v-30.9l-35-57.2h19.2l24.1,39.5h.3l23.9-39.5h19.5Z"></path>
+  <path class="st0" d="M798.2,16.9v15.8h-33.6v72.3h-16.7V32.7h-33.6v-15.8h83.9Z"></path>
+  <path class="st0" d="M678.8,16.9h16.8v88.1h-16.8V16.9Z"></path>
+  <path class="st0" d="M587.2,44.1v60.9h-16.8V16.9h15l52,60.8V16.9h16.8v88.1h-15.3l-51.7-60.9Z"></path>
+  <path class="st0" d="M529.1,16.9h16.9v88.1h-16.9V16.9Z"></path>
+  <path class="st0" d="M445,68.8v36.2h-16.9V16.9h80.4v15.8h-63.6v20.3h46.7v15.8h-46.7Z"></path>
+  <path class="st0" d="M336.5,44.1v60.9h-16.9V16.9h15l52,60.8V16.9h16.9v88.1h-15.3l-51.7-60.9Z"></path>
+  <path class="st0" d="M278.4,16.9h16.9v88.1h-16.9V16.9Z"></path>
+  <path class="st0" d="M111.1,16.9h16.8v88.1h-16.8V16.9Z"></path>
+  <path class="st0" d="M0,105h17.8L46.4,30.2l29.3,74.8h18L59.4,16.9h-25.1L0,105Z"></path>
+  <path class="st1" d="M259.6,75s-41.3-9.2-54-1.9c-12.7,7.3-20.9,31.2-20.9,31.2,0,0,4.8-24.8-2.5-37.5-7.3-12.7-31.2-20.9-31.2-20.9,0,0,41.3,9.2,54,1.9,12.7-7.3,20.9-31.2,20.9-31.2,0,0-4.8,24.8,2.5,37.5,7.3,12.7,31.2,20.9,31.2,20.9Z"></path>
+</svg>

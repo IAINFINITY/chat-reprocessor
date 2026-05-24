@@ -1,18 +1,23 @@
+﻿(() => {
+"use strict";
+
 var state = {
   companies: [],
   supabaseTables: [],
   filteredTables: [],
   activeCompanyIndex: -1,
+  confirmResolver: null,
 };
 
 var el = {};
 [
   "companiesContainer",
   "addCompanyBtn",
+  "addManyCompaniesBtn",
   "saveCompaniesBtn",
   "reloadCompaniesBtn",
-  "statusBar",
-  "statusText",
+  "configStatusBar",
+  "configStatusText",
   "saveFeedback",
   "schemaInput",
   "loadTablesBtn",
@@ -20,9 +25,26 @@ var el = {};
   "tableTargetCompanySelect",
   "supabaseTablesList",
   "supabaseTablesDatalist",
+  "tablesCount",
+  "confirmModal",
+  "confirmModalMessage",
+  "confirmModalOk",
+  "confirmModalCancel",
 ].forEach(function (id) {
   el[id] = document.getElementById(id);
 });
+
+function hasEl(name) {
+  return Boolean(el[name]);
+}
+
+function onEl(name, eventName, handler) {
+  if (!hasEl(name)) {
+    return false;
+  }
+  el[name].addEventListener(eventName, handler);
+  return true;
+}
 
 function safeText(value, fallback) {
   var text = String(value == null ? "" : value).trim();
@@ -30,18 +52,24 @@ function safeText(value, fallback) {
 }
 
 function setStatus(message, isError) {
-  el.statusText.textContent = message;
-  el.statusBar.style.animation = "none";
-  el.statusBar.classList.remove("is-visible", "is-error");
-  void el.statusBar.offsetHeight;
+  if (!hasEl("configStatusText") || !hasEl("configStatusBar")) {
+    return;
+  }
+  el.configStatusText.textContent = message;
+  el.configStatusBar.style.animation = "none";
+  el.configStatusBar.classList.remove("is-visible", "is-error");
+  void el.configStatusBar.offsetHeight;
   if (isError) {
-    el.statusBar.classList.add("is-error");
+    el.configStatusBar.classList.add("is-error");
   } else {
-    el.statusBar.classList.add("is-visible");
+    el.configStatusBar.classList.add("is-visible");
   }
 }
 
 function setSaveFeedback(message, type) {
+  if (!hasEl("saveFeedback")) {
+    return;
+  }
   el.saveFeedback.textContent = safeText(message, "");
   el.saveFeedback.classList.remove("success", "error");
   if (type === "success") {
@@ -49,6 +77,38 @@ function setSaveFeedback(message, type) {
   } else if (type === "error") {
     el.saveFeedback.classList.add("error");
   }
+}
+
+function closeConfirmModal(result) {
+  if (hasEl("confirmModal")) {
+    el.confirmModal.classList.remove("is-open");
+    el.confirmModal.setAttribute("aria-hidden", "true");
+  }
+
+  if (typeof state.confirmResolver === "function") {
+    var resolver = state.confirmResolver;
+    state.confirmResolver = null;
+    resolver(Boolean(result));
+  }
+}
+
+function openConfirmModal(message) {
+  if (!el.confirmModal || !el.confirmModalMessage) {
+    return Promise.resolve(window.confirm(String(message || "Deseja continuar?")));
+  }
+
+  if (typeof state.confirmResolver === "function") {
+    state.confirmResolver(false);
+    state.confirmResolver = null;
+  }
+
+  el.confirmModalMessage.textContent = safeText(message, "Deseja continuar?");
+  el.confirmModal.classList.add("is-open");
+  el.confirmModal.setAttribute("aria-hidden", "false");
+
+  return new Promise(function (resolve) {
+    state.confirmResolver = resolve;
+  });
 }
 
 async function readJsonSafe(response) {
@@ -69,17 +129,19 @@ function makeEmptyCompany() {
     nome: "",
     url_webhook: "",
     tabela: "",
+    chatwoot_account_ids: [],
   };
 }
 
 function renderCompanies() {
+  if (!hasEl("companiesContainer")) {
+    return;
+  }
   el.companiesContainer.innerHTML = "";
 
   if (!Array.isArray(state.companies) || state.companies.length === 0) {
-    var empty = document.createElement("div");
-    empty.className = "config-empty";
-    empty.textContent = "Nenhuma empresa cadastrada.";
-    el.companiesContainer.appendChild(empty);
+    el.companiesContainer.innerHTML = '<div class="config-empty"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 6px;opacity:0.3"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>Nenhuma empresa cadastrada.<br>Clique em <strong>Nova empresa</strong> para adicionar.</div>';
+    renderTableTargetOptions();
     return;
   }
 
@@ -87,16 +149,10 @@ function renderCompanies() {
     var row = document.createElement("div");
     row.className = "config-row" + (state.activeCompanyIndex === index ? " is-active" : "");
     row.setAttribute("data-company-row-index", String(index));
-    row.innerHTML =
-      '<div class="config-row-head">' +
-      '<span class="config-row-title">Empresa #' + (index + 1) + "</span>" +
-      '<button class="mini-btn danger" data-action="remove" data-index="' + index + '">Remover</button>' +
-      "</div>" +
-      '<div class="config-row-grid">' +
-      '<div class="field"><label>Nome</label><input data-field="nome" data-index="' + index + '" value="' + escapeHtml(company.nome || "") + '" /></div>' +
-      '<div class="field"><label>URL do webhook</label><input data-field="url_webhook" data-index="' + index + '" value="' + escapeHtml(company.url_webhook || "") + '" /></div>' +
-      '<div class="field"><label>Tabela do Supabase</label><input list="supabaseTablesDatalist" data-field="tabela" data-index="' + index + '" value="' + escapeHtml(company.tabela || "") + '" /></div>' +
-      "</div>";
+    var accountIdsText = Array.isArray(company.chatwoot_account_ids)
+      ? company.chatwoot_account_ids.join(",")
+      : safeText(company.chatwoot_account_ids, "");
+    row.innerHTML = '<div class="config-row-head"><span class="config-row-title">' + escapeHtml(company.nome || ('Empresa #' + (index + 1))) + '</span><button class="mini-btn danger" data-action="remove" data-index="' + index + '"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Remover</button></div><div class="config-row-grid"><div class="field"><label>Nome</label><input data-field="nome" data-index="' + index + '" value="' + escapeHtml(company.nome || '') + '" placeholder="Ex: Akila"></div><div class="field"><label>Webhook URL</label><input data-field="url_webhook" data-index="' + index + '" value="' + escapeHtml(company.url_webhook || '') + '" placeholder="https://webhooks-n8n.app/webhook/..."></div><div class="field"><label>Account IDs Chatwoot</label><input data-field="chatwoot_account_ids" data-index="' + index + '" value="' + escapeHtml(accountIdsText) + '" placeholder="Ex: 20,26"></div><div class="field full"><label>Tabela de pausa (Supabase)</label><input list="supabaseTablesDatalist" data-field="tabela" data-index="' + index + '" value="' + escapeHtml(company.tabela || '') + '" placeholder="Selecionar na lista abaixo"></div></div>';
     el.companiesContainer.appendChild(row);
   });
 
@@ -117,7 +173,16 @@ function updateCompanyField(index, field, value) {
   if (!Number.isInteger(idx) || idx < 0 || idx >= state.companies.length) {
     return;
   }
-  if (!["nome", "url_webhook", "tabela"].includes(field)) {
+  if (!["nome", "url_webhook", "tabela", "chatwoot_account_ids"].includes(field)) {
+    return;
+  }
+  if (field === "chatwoot_account_ids") {
+    state.companies[idx].chatwoot_account_ids = String(value || "")
+      .split(",")
+      .map(function (item) { return item.trim(); })
+      .filter(Boolean)
+      .map(function (item) { return Number(item); })
+      .filter(function (item) { return Number.isInteger(item) && item > 0; });
     return;
   }
   state.companies[idx][field] = String(value || "");
@@ -184,6 +249,9 @@ function renderTableTargetOptions() {
 }
 
 async function loadCompanies() {
+  if (!hasEl("companiesContainer")) {
+    return;
+  }
   try {
     var response = await fetch("/api/config/empresas");
     var data = await readJsonSafe(response);
@@ -211,11 +279,19 @@ function collectCompaniesFromUi() {
     var nome = safeText(row.querySelector('[data-field="nome"]') && row.querySelector('[data-field="nome"]').value, "");
     var url = safeText(row.querySelector('[data-field="url_webhook"]') && row.querySelector('[data-field="url_webhook"]').value, "");
     var tabela = safeText(row.querySelector('[data-field="tabela"]') && row.querySelector('[data-field="tabela"]').value, "");
+    var accountIdsRaw = safeText(row.querySelector('[data-field="chatwoot_account_ids"]') && row.querySelector('[data-field="chatwoot_account_ids"]').value, "");
+    var accountIds = accountIdsRaw
+      .split(",")
+      .map(function (item) { return item.trim(); })
+      .filter(Boolean)
+      .map(function (item) { return Number(item); })
+      .filter(function (item) { return Number.isInteger(item) && item > 0; });
 
     companies.push({
       nome: nome,
       url_webhook: url,
       tabela: tabela,
+      chatwoot_account_ids: accountIds,
     });
   });
 
@@ -223,6 +299,9 @@ function collectCompaniesFromUi() {
 }
 
 async function saveCompanies() {
+  if (!hasEl("companiesContainer")) {
+    return;
+  }
   try {
     setSaveFeedback("Salvando empresas.json...", "");
     var payload = {
@@ -249,6 +328,9 @@ async function saveCompanies() {
 }
 
 async function loadSupabaseTables() {
+  if (!hasEl("schemaInput")) {
+    return;
+  }
   var schema = safeText(el.schemaInput.value, "public");
 
   try {
@@ -266,6 +348,9 @@ async function loadSupabaseTables() {
 }
 
 function applyTableFilter() {
+  if (!hasEl("tableFilterInput")) {
+    return;
+  }
   var needle = safeText(el.tableFilterInput.value, "").toLowerCase();
   if (!needle) {
     state.filteredTables = state.supabaseTables.slice();
@@ -278,24 +363,26 @@ function applyTableFilter() {
 }
 
 function renderSupabaseTables() {
+  if (!hasEl("supabaseTablesList")) {
+    return;
+  }
   el.supabaseTablesList.innerHTML = "";
   if (!Array.isArray(state.filteredTables) || state.filteredTables.length === 0) {
-    var empty = document.createElement("div");
-    empty.className = "config-empty";
-    empty.textContent = "Nenhuma tabela encontrada para esse filtro.";
-    el.supabaseTablesList.appendChild(empty);
+    el.supabaseTablesList.innerHTML = '<div class="config-empty"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 6px;opacity:0.3"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Nenhuma tabela encontrada para este filtro.</div>';
+    renderTablesDatalist();
+    if (el.tablesCount) el.tablesCount.textContent = "0";
     return;
   }
 
   state.filteredTables.forEach(function (tableName) {
     var item = document.createElement("div");
     item.className = "table-item";
-    item.innerHTML =
-      '<span class="table-name">' + escapeHtml(tableName) + "</span>" +
-      '<button data-action="pick-table" data-table="' + escapeHtml(tableName) + '">Usar</button>';
+    var shortName = tableName.length > 25 ? tableName.substring(0, 22) + "..." : tableName;
+    item.innerHTML = '<span class="table-icon">DB</span><span class="table-name" title="' + escapeHtml(tableName) + '">' + escapeHtml(shortName) + '</span><button data-action="pick-table" data-table="' + escapeHtml(tableName) + '"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34"/><polygon points="18 2 22 6 12 16 8 16 8 12 18 2"/></svg> Vincular</button>';
     el.supabaseTablesList.appendChild(item);
   });
 
+  if (el.tablesCount) el.tablesCount.textContent = String(state.filteredTables.length);
   renderTablesDatalist();
 }
 
@@ -353,24 +440,44 @@ function applySelectedTable(tableName) {
   setSaveFeedback("Tabela aplicada. Clique em 'Salvar empresas.json' para persistir.", "");
 }
 
-el.addCompanyBtn.addEventListener("click", function () {
+onEl("addCompanyBtn", "click", async function () {
+  var confirmed = await openConfirmModal("Deseja adicionar uma nova empresa?");
+  if (!confirmed) {
+    return;
+  }
   state.companies.push(makeEmptyCompany());
   state.activeCompanyIndex = state.companies.length - 1;
   renderCompanies();
+  setStatus("Nova empresa adicionada. Preencha os campos e salve.", false);
 });
 
-el.saveCompaniesBtn.addEventListener("click", saveCompanies);
-el.reloadCompaniesBtn.addEventListener("click", loadCompanies);
-el.loadTablesBtn.addEventListener("click", loadSupabaseTables);
-el.tableFilterInput.addEventListener("input", applyTableFilter);
-el.tableTargetCompanySelect.addEventListener("change", function () {
+if (hasEl("addManyCompaniesBtn")) {
+  onEl("addManyCompaniesBtn", "click", async function () {
+    var confirmed = await openConfirmModal("Deseja adicionar 5 empresas de uma vez?");
+    if (!confirmed) {
+      return;
+    }
+    for (var i = 0; i < 5; i += 1) {
+      state.companies.push(makeEmptyCompany());
+    }
+    state.activeCompanyIndex = state.companies.length - 1;
+    renderCompanies();
+    setStatus("5 empresas adicionadas. Preencha os campos e salve.", false);
+  });
+}
+
+onEl("saveCompaniesBtn", "click", saveCompanies);
+onEl("reloadCompaniesBtn", "click", loadCompanies);
+onEl("loadTablesBtn", "click", loadSupabaseTables);
+onEl("tableFilterInput", "input", applyTableFilter);
+onEl("tableTargetCompanySelect", "change", function () {
   var idx = Number(el.tableTargetCompanySelect.value);
   if (Number.isInteger(idx)) {
     setActiveCompanyIndex(idx);
   }
 });
 
-el.companiesContainer.addEventListener("input", function (event) {
+onEl("companiesContainer", "input", function (event) {
   var target = event.target;
   if (!target || !target.matches) {
     return;
@@ -385,13 +492,19 @@ el.companiesContainer.addEventListener("input", function (event) {
   );
 });
 
-el.companiesContainer.addEventListener("click", function (event) {
+onEl("companiesContainer", "click", async function (event) {
   var target = event.target;
-  if (!target || !target.matches) {
+  if (!target || !target.closest) {
     return;
   }
-  if (target.getAttribute("data-action") === "remove") {
-    removeCompany(target.getAttribute("data-index"));
+  var removeButton = target.closest('[data-action="remove"]');
+  if (removeButton) {
+    var confirmed = await openConfirmModal("Deseja remover esta empresa?");
+    if (!confirmed) {
+      return;
+    }
+    removeCompany(removeButton.getAttribute("data-index"));
+    setStatus("Empresa removida. Clique em salvar para persistir.", false);
     return;
   }
 
@@ -401,7 +514,7 @@ el.companiesContainer.addEventListener("click", function (event) {
   }
 });
 
-el.companiesContainer.addEventListener("focusin", function (event) {
+onEl("companiesContainer", "focusin", function (event) {
   var target = event.target;
   if (!target || !target.closest) {
     return;
@@ -412,19 +525,48 @@ el.companiesContainer.addEventListener("focusin", function (event) {
   }
 });
 
-el.supabaseTablesList.addEventListener("click", function (event) {
+onEl("supabaseTablesList", "click", function (event) {
   var target = event.target;
-  if (!target || !target.matches) {
+  if (!target || !target.closest) {
     return;
   }
-  if (target.getAttribute("data-action") !== "pick-table") {
+  var actionButton = target.closest('[data-action="pick-table"]');
+  if (!actionButton) {
     return;
   }
-  applySelectedTable(target.getAttribute("data-table"));
+  applySelectedTable(actionButton.getAttribute("data-table"));
 });
 
+if (hasEl("confirmModalOk")) {
+  onEl("confirmModalOk", "click", function () {
+    closeConfirmModal(true);
+  });
+}
+
+if (hasEl("confirmModalCancel")) {
+  onEl("confirmModalCancel", "click", function () {
+    closeConfirmModal(false);
+  });
+}
+
+if (hasEl("confirmModal")) {
+  onEl("confirmModal", "click", function (event) {
+    var target = event.target;
+    if (target && target.getAttribute && target.getAttribute("data-modal-close") === "true") {
+      closeConfirmModal(false);
+    }
+  });
+}
+
 (function init() {
+  if (!hasEl("companiesContainer")) {
+    console.error("[configuracoes-dashboard] Elementos essenciais nao encontrados no DOM. Script em modo degradado.");
+    return;
+  }
   setSaveFeedback("", "");
   loadCompanies();
   loadSupabaseTables();
 })();
+
+})();
+

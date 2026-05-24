@@ -1,125 +1,375 @@
-<!doctype html>
-<html lang="pt-BR" data-theme="light">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>IA Infinity | Reprocessador</title>
-    <link rel="stylesheet" href="/assets/css/configuracoes-dashboard.css" />
-  </head>
-  <body>
-    <nav class="navbar">
-      <div class="navbar-left">
-        <span class="navbar-logo" aria-hidden="true">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4842 765">
-            <defs>
-              <linearGradient id="lg0" x1="570.3" y1="153.3" x2="1799.1" y2="604.3" gradientUnits="userSpaceOnUse">
-                <stop offset=".1" stop-color="#ee5c29"/>
-                <stop offset=".5" stop-color="#02112a"/>
-                <stop offset=".9" stop-color="#00b7ff"/>
-              </linearGradient>
-              <linearGradient id="lg1" x1="1263.2" y1="384.3" x2="1825.7" y2="384.3" gradientTransform="translate(0 765.9) scale(1 -1)" gradientUnits="userSpaceOnUse">
-                <stop offset=".3" stop-color="#fff" stop-opacity="0"/>
-                <stop offset=".6" stop-color="#fff" stop-opacity="0"/>
-                <stop offset=".7" stop-color="#fff" stop-opacity=".2"/>
-                <stop offset=".9" stop-color="#f2f0ef"/>
-              </linearGradient>
-              <linearGradient id="lg2" x1="310.5" x2="873" gradientTransform="translate(1436.4 -2.7) rotate(-180) scale(1 -1)" xlink:href="#lg1"/>
-            </defs>
-            <path fill="var(--fg)" d="M0,603.1h89.3L233.4,227.1l147.3,376h90.7l-172.7-442.7h-126L0,603.1Z"/>
-            <path fill="var(--fg)" d="M4841.1,160.4l-176.7,287.4v155.4h-84.7v-155.4l-176-287.4h96.7l121.3,198.7h1.3l120-198.7h98Z"/>
-            <path fill="var(--fg)" d="M4354.1,160.4v79.3h-168.7v363.4h-84V239.7h-168.7v-79.3h421.4Z"/>
-            <path fill="var(--fg)" d="M3754.4,160.4h84.7v442.7h-84.7V160.4Z"/>
-            <path fill="var(--fg)" d="M3294.1,297.1v306h-84.7V160.4h75.3l261.4,305.4V160.4h84.7v442.7h-76.7l-260-306Z"/>
-            <path fill="var(--fg)" d="M3001.7,160.4h84.7v442.7h-84.7V160.4Z"/>
-            <path fill="var(--fg)" d="M2579.1,421.1v182h-84.7V160.4h404v79.3h-319.4v102h234.7v79.3h-234.7Z"/>
-            <path fill="var(--fg)" d="M2034.2,297.1v306h-84.7V160.4h75.3l261.4,305.4V160.4h84.7v442.7h-76.7l-260-306Z"/>
-            <rect fill="url(#lg0)" x="563.9" y="160.4" width="1257" height="442.4"/>
-            <path fill="url(#lg1)" d="M1825.7,602.8h-562.5V160.4h562.5v442.4Z"/>
-            <path fill="url(#lg2)" d="M563.4,160.4h562.5v442.4h-562.5V160.4Z"/>
-            <path fill="var(--fg)" d="M1536.1,474.3s-260.5-58.3-340.7-12c-80.2,46.3-132,196.8-132,196.8,0,0,30.3-156.3-15.9-236.5-46.3-80.2-196.8-132-196.8-132,0,0,260.5,58.3,340.6,12,80.2-46.3,132-196.8,132-196.8,0,0-30.4,156.3,15.9,236.5,46.3,80.2,196.8,132,196.8,132Z"/>
-          </svg>
-        </span>
-        <span class="navbar-sep"></span>
-        <span class="badge">empresas.json</span>
-      </div>
-      <div class="navbar-nav">
-        <a href="/reprocessador">Reprocessador</a>
-        <a href="/configuracoes" class="active">Configurações</a>
-      </div>
-      <div class="navbar-right">
-        <button class="theme-btn" id="themeToggle" aria-label="Alternar tema">
-          <span id="themeIcon"></span>
+﻿<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IA Infinity | Configurações</title>
+<script>document.documentElement.setAttribute("data-motion","full");</script>
+<link rel="stylesheet" href="/assets/css/dashboard/foundation.css">
+<link rel="stylesheet" href="/assets/css/dashboard/layout.css">
+<link rel="stylesheet" href="/assets/css/dashboard/forms.css">
+<link rel="stylesheet" href="/assets/css/dashboard/components.css">
+<link rel="stylesheet" href="/assets/css/dashboard/utilities.css">
+<link rel="stylesheet" href="/assets/css/dashboard/settings.css">
+</head>
+<body>
+
+<div class="app-layout">
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <img class="logo-img logo-universal" src="/logos/iainfinityclarologo.svg" data-logo-light="/logos/iainfinityclarologo.svg" data-logo-dark="/logos/iainfinityclarologo.svg" alt="IA Infinity">
+    </div>
+    <nav class="sidebar-nav">
+      <a data-page="reprocessador" href="#reprocessador">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        <span>Dashboard</span>
+      </a>
+      <a class="active" data-page="configuracoes" href="#configuracoes">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Configurações</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <span>v2.0</span>
+      <span style="font-size:.5rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);font-weight:600">IA Infinity</span>
+    </div>
+  </aside>
+
+  <div class="main-area">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" title="Ocultar sidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
         </button>
       </div>
-    </nav>
+      <div class="topbar-right">
+        <button class="theme-btn" id="themeToggle" aria-label="Alternar tema"><span id="themeIcon">&#9789;</span></button>
+      </div>
+    </header>
 
-    <main class="page-body">
-      <div class="main-col">
-        <div class="section-group">
-          <div class="section-divider">
-            <h2>Tabelas Supabase</h2>
-            <span class="line"></span>
+    <main class="content">
+
+      <!-- ═══ REPROCESSADOR ═══ -->
+      <div class="page" id="page-reprocessador">
+        <div class="page-head">
+          <div>
+            <h1>Reprocessador <small>Reenvie conversas do Chatwoot para fluxos n8n com rastreamento completo</small></h1>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card success stagger-fade stagger-fade-d1">
+            <div class="bar-top"></div>
+            <div class="stat-card-inner">
+              <div class="stat-label">Conversas reprocessadas</div>
+              <div class="stat-value animate-count" id="statSuccess">0</div>
+              <div class="stat-sub">últimos 30 dias</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+          </div>
+          <div class="stat-card error stagger-fade stagger-fade-d2">
+            <div class="bar-top"></div>
+            <div class="stat-card-inner">
+              <div class="stat-label">Com falha</div>
+              <div class="stat-value animate-count" id="statErrors">0</div>
+              <div class="stat-sub">últimos 30 dias</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+          </div>
+          <div class="stat-card pending stagger-fade stagger-fade-d3">
+            <div class="bar-top"></div>
+            <div class="stat-card-inner">
+              <div class="stat-label">Em fila</div>
+              <div class="stat-value animate-count" id="statPending">0</div>
+              <div class="stat-sub">aguardando execução</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+          </div>
+          <div class="stat-card customers stagger-fade stagger-fade-d4">
+            <div class="bar-top"></div>
+            <div class="stat-card-inner">
+              <div class="stat-label">Clientes ativos</div>
+              <div class="stat-value animate-count" id="statClients">0</div>
+              <div class="stat-sub">empresas integradas</div>
+              <div class="stat-bar"><div class="stat-bar-fill" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Pipeline de reprocessamento</h2>
+            <span class="section-spacer"></span>
           </div>
 
-          <section class="card anim-card">
-            <div class="card-header">
-              <span class="card-title"><span class="bar"></span>Explorar tabelas</span>
-              <button id="loadTablesBtn" class="btn btn-secondary btn-sm">Atualizar</button>
+          <section class="card card-command stagger-fade stagger-fade-d5">
+            <div class="pipeline" id="pipelineSteps">
+              <span class="pipeline-step active"><span class="step-dot"></span> URL</span>
+              <span class="pipeline-arrow">&#8594;</span>
+              <span class="pipeline-step"><span class="step-dot"></span> Identificar</span>
+              <span class="pipeline-arrow">&#8594;</span>
+              <span class="pipeline-step"><span class="step-dot"></span> Revisar</span>
+              <span class="pipeline-arrow">&#8594;</span>
+              <span class="pipeline-step"><span class="step-dot"></span> Enviar</span>
+              <span class="pipeline-arrow">&#8594;</span>
+              <span class="pipeline-step"><span class="step-dot"></span> Monitorar</span>
             </div>
-            <div class="supabase-tables-layout">
-              <div class="supabase-controls">
-                <div class="field" style="flex:1">
-                  <label>Schema</label>
-                  <input id="schemaInput" type="text" value="public" />
-                </div>
-                <div class="field" style="flex:2">
-                  <label>Filtrar tabela</label>
-                  <input id="tableFilterInput" type="text" placeholder="Nome da tabela..." />
-                </div>
-                <div class="field" style="flex:1">
-                  <label>Aplicar tabela em</label>
-                  <select id="tableTargetCompanySelect"></select>
-                </div>
+            <div class="form-row">
+              <div class="field full">
+                <label for="conversationUrl">Link da conversa no Chatwoot</label>
+                <input id="conversationUrl" type="url" placeholder="https://chat.seudominio.com/app/accounts/12/conversations/7544" autocomplete="off" spellcheck="false">
               </div>
-              <div class="list-scroll" id="supabaseTablesList"></div>
+              <div class="field">
+                <label for="clientSelect">Cliente <span class="label-hint">ou detectar automático</span></label>
+                <select id="clientSelect">
+                  <option value="">Detectar automaticamente</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="resolvedClient">Cliente resolvido</label>
+                <input id="resolvedClient" type="text" value="-" disabled>
+              </div>
+              <div class="field">
+                <label for="messageCount">Mensagens a processar</label>
+                <input id="messageCount" type="number" min="1" max="20" step="1" value="3">
+              </div>
+            </div>
+            <div class="company-logo-area" id="companyLogoArea">
+              <img id="companyLogoImg" src="" alt="">
+            </div>
+            <div class="actions-row">
+              <button id="previewBtn" class="btn btn-primary">Gerar JSON de preview</button>
+              <button id="executeBtn" class="btn btn-secondary" disabled>Reprocessar</button>
+            </div>
+            <div class="status-bar" id="statusBar">
+              <span class="status-dot"></span>
+              <span id="statusText">Insira o link da conversa para começar.</span>
             </div>
           </section>
         </div>
 
-        <div class="section-group">
-          <div class="section-divider">
-            <h2>Empresas</h2>
-            <span class="line"></span>
+        <div id="resultsSection" style="display:none">
+          <div class="section">
+            <div class="section-header">
+              <h2>Preview do payload</h2>
+              <span class="section-spacer"></span>
+              <span style="font-size:.66rem;padding:2px 9px;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-weight:500;font-family:var(--font-display)" id="summaryBadge">-</span>
+              <button class="section-action" id="copyBtn">Copiar JSON</button>
+            </div>
+            <div class="results-grid">
+              <section class="card stagger-fade stagger-fade-d1">
+                <div class="card-title">Dados extraídos da conversa</div>
+                <table class="summary-table">
+                  <tr><td>Account ID</td><td class="mono" id="sAccount">-</td></tr>
+                  <tr><td>Conversa #</td><td class="mono" id="sConversation">-</td></tr>
+                  <tr><td>Contato</td><td class="accent" id="sContact">-</td></tr>
+                  <tr><td>Telefone</td><td class="mono" id="sPhone">-</td></tr>
+                  <tr><td>Última mensagem</td><td id="sMessage">-</td></tr>
+                  <tr><td>Recebida em</td><td id="sReceived">-</td></tr>
+                  <tr><td>Cliente detectado</td><td class="accent" id="sDetected">-</td></tr>
+                  <tr><td>Webhook destino</td><td><span class="tag-webhook" id="sWebhook">-</span></td></tr>
+                  <tr><td>Status na base</td><td id="sPauseStatus">-</td></tr>
+                  <tr><td>Registro de pausa</td><td class="mono" id="sPauseDetails" style="font-size:.72rem">-</td></tr>
+                </table>
+              </section>
+              <section class="card card-json stagger-fade stagger-fade-d2">
+                <div class="card-title">JSON de envio ao n8n</div>
+                <div class="json-block">
+                  <pre id="output">{}</pre>
+                </div>
+              </section>
+            </div>
           </div>
 
-          <section class="card anim-card">
-            <div class="card-header">
-              <span class="card-title"><span class="bar"></span>Cadastro de empresas</span>
-              <button id="addCompanyBtn" class="btn btn-secondary btn-sm">Adicionar empresa</button>
+          <div class="section">
+            <div class="section-header">
+              <h2>Conversa original</h2>
+              <span class="section-spacer"></span>
+              <button class="section-action" id="refreshChatPreviewBtn">Recarregar</button>
             </div>
+            <section class="card stagger-fade stagger-fade-d3">
+              <div class="chat-preview-status" id="chatPreviewStatus">Preview da conversa será carregado após gerar o JSON.</div>
+              <div class="chat-thread" id="chatPreviewList"></div>
+              <div class="chat-reprocess-outbox">
+                <div class="chat-reprocess-head">
+                  <span>Mensagens que serão reenviadas</span>
+                  <span class="badge" id="chatReprocessBadge">0</span>
+                </div>
+                <div class="chat-thread chat-thread-out" id="chatReprocessList"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Atividade operacional</h2>
+            <span class="section-spacer"></span>
+          </div>
+          <div style="display:grid;grid-template-columns:1.1fr 1.9fr;gap:18px">
+            <section class="card card-activity stagger-fade stagger-fade-d4" style="margin:0">
+              <div class="card-title">Eventos da sessão</div>
+              <div class="activity-feed" id="activityFeed"></div>
+            </section>
+            <section class="card card-timeline stagger-fade stagger-fade-d5" style="margin:0">
+              <div class="card-title">Timeline de execuções n8n</div>
+              <div class="timeline-toolbar">
+                <select id="n8nTypeFilter" class="timeline-control">
+                  <option value="all">Todos os eventos</option>
+                  <option value="success">Sucesso</option>
+                  <option value="error">Erro</option>
+                  <option value="warning">Em andamento</option>
+                  <option value="info">Info</option>
+                </select>
+                <input id="n8nRequestFilter" class="timeline-control" type="text" placeholder="Buscar por request_id ou conversa" autocomplete="off" spellcheck="false">
+                <button class="btn btn-ghost btn-sm" id="clearN8nFiltersBtn">Limpar</button>
+              </div>
+              <div class="timeline-feed" id="n8nEventsFeed"></div>
+              <div class="card-footer">
+                <button class="btn btn-ghost btn-sm" id="refreshN8nEventsBtn">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                  Recarregar eventos
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <section class="diagnostic-panel" id="diagnosticPanel">
+          <div class="diag-header">&#9888; Diagnóstico de falha</div>
+          <div class="diag-grid">
+            <div class="diag-item"><span class="lbl">Código do erro</span><span class="val" id="dCode">-</span></div>
+            <div class="diag-item"><span class="lbl">Título</span><span class="val" id="dTitle">-</span></div>
+            <div class="diag-item"><span class="lbl">Causa provável</span><span class="val" id="dCause">-</span></div>
+            <div class="diag-item"><span class="lbl">Sugestão</span><span class="val" id="dSuggestion">-</span></div>
+            <div class="diag-item"><span class="lbl">Request ID</span><span class="val mono" id="dRequest">-</span></div>
+            <div class="diag-item"><span class="lbl">Fluxo n8n</span><span class="val" id="dWorkflow">-</span></div>
+            <div class="diag-item"><span class="lbl">Nó com falha</span><span class="val" id="dNode">-</span></div>
+            <div class="diag-item"><span class="lbl">Execução</span><span class="val" id="dExecution">-</span></div>
+            <div class="diag-item full"><span class="lbl">Mensagem do fluxo</span><span class="val" id="dFlowMessage">-</span></div>
+            <div class="diag-item full"><span class="lbl">Resposta upstream</span><span class="val" id="dUpstream">-</span></div>
+          </div>
+          <div class="actions-row" style="margin-top:10px">
+            <button id="n8nLookupBtn" class="btn btn-ghost btn-sm" disabled>Buscar status no fluxo</button>
+            <button id="clearDiagnosticBtn" class="btn btn-ghost btn-sm">Limpar diagnóstico</button>
+          </div>
+        </section>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Histórico de execuções</h2>
+            <span class="section-spacer"></span>
+            <button class="section-action" id="refreshHistory">Atualizar</button>
+          </div>
+          <section class="card card-history stagger-fade stagger-fade-d6">
+            <div class="table-wrap">
+              <table class="history">
+                <thead><tr><th>ID</th><th>Conversa</th><th>Cliente</th><th>Status</th><th>Data</th><th>Duração</th></tr></thead>
+                <tbody id="historyBody"></tbody>
+              </table>
+            </div>
+            <div class="pagination" id="historyPagination"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ═══ CONFIGURAÇÕES ═══ -->
+      <div class="page is-active" id="page-configuracoes">
+        <div class="page-head">
+          <div>
+            <h1>Configurações</h1>
+            <p style="margin:4px 0 0;font-size:.78rem;color:var(--muted);line-height:1.4">Gerencie empresas, webhooks e tabelas do Supabase — sem hardcode</p>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Tabelas do Supabase</h2>
+            <span class="section-spacer"></span>
+            <span class="badge-count" id="tablesCount">0</span>
+            <button id="loadTablesBtn" class="btn btn-ghost btn-sm">Recarregar</button>
+          </div>
+            <section class="card stagger-fade stagger-fade-d1">
+            <div class="supabase-controls">
+              <div class="field" style="flex:1">
+                <label>Schema</label>
+                <input id="schemaInput" type="text" value="public">
+              </div>
+              <div class="field" style="flex:2">
+                <label>Filtrar pelo nome</label>
+                <input id="tableFilterInput" type="text" placeholder="Ex: AKILA, pausar, empresas...">
+              </div>
+              <div class="field" style="flex:1">
+                <label>Vincular à empresa</label>
+                <select id="tableTargetCompanySelect"></select>
+              </div>
+            </div>
+            <div class="list-scroll" id="supabaseTablesList"></div>
+          </section>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Empresas integradas</h2>
+            <span class="section-spacer"></span>
+            <button id="addCompanyBtn" class="btn btn-secondary btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Nova empresa
+            </button>
+            <button id="addManyCompaniesBtn" class="btn btn-secondary btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+              +5 em lote
+            </button>
+          </div>
+          <section class="card stagger-fade stagger-fade-d2">
             <div id="companiesContainer"></div>
-            <div class="actions-row" style="margin-top:16px">
-              <button id="saveCompaniesBtn" class="btn btn-primary">Salvar empresas.json</button>
-              <button id="reloadCompaniesBtn" class="btn btn-secondary">Recarregar arquivo</button>
+            <div class="actions-row" style="margin-top:14px">
+              <button id="saveCompaniesBtn" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Salvar empresas.json
+              </button>
+              <button id="reloadCompaniesBtn" class="btn btn-ghost">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                Descartar alterações
+              </button>
             </div>
             <div id="saveFeedback" class="config-feedback"></div>
-            <div class="status-bar" id="statusBar">
+            <div class="status-bar" id="configStatusBar">
               <span class="status-dot"></span>
-              <span id="statusText">Carregando configurações...</span>
+              <span id="configStatusText">Carregando configurações...</span>
             </div>
           </section>
         </div>
       </div>
+
     </main>
 
-    <footer class="app-footer">
-      <span class="footer-left">Dev by <strong>IA Infinity</strong></span>
-      <span class="footer-center">© 2026 IA Infinity</span>
-      <span class="footer-right"></span>
+    <footer class="footer-bar">
+      <span>Desenvolvido por <strong>IA Infinity</strong></span>
+      <span>&copy; 2026 IA Infinity &mdash; Operação em tempo real</span>
     </footer>
+  </div>
+</div>
 
-    <script defer src="/assets/js/theme-toggle.js"></script>
-    <script defer src="/assets/js/configuracoes-dashboard.js"></script>
-    <datalist id="supabaseTablesDatalist"></datalist>
-  </body>
+<div id="confirmModal" class="confirm-modal" aria-hidden="true">
+  <div class="confirm-modal-backdrop" data-modal-close="true"></div>
+  <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <h3 id="confirmModalTitle">Confirmar ação</h3>
+    <p id="confirmModalMessage">Deseja continuar?</p>
+    <div class="confirm-modal-actions">
+      <button id="confirmModalCancel" class="btn btn-secondary btn-sm" type="button">Cancelar</button>
+      <button id="confirmModalOk" class="btn btn-primary btn-sm" type="button">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastNotice" class="toast-notice" aria-live="polite" aria-atomic="true"></div>
+<datalist id="supabaseTablesDatalist"></datalist>
+
+<script defer src="/assets/js/theme-toggle.js"></script>
+<script defer src="/assets/js/reprocessador-dashboard.js"></script>
+<script defer src="/assets/js/configuracoes-dashboard.js"></script>
+</body>
 </html>
