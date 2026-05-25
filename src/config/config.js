@@ -88,6 +88,9 @@ export function getConfig() {
     configWriteHeader: String(process.env.CONFIG_WRITE_HEADER || "x-config-secret")
       .trim()
       .toLowerCase(),
+    tempAuthEnabled: String(process.env.TEMP_AUTH_ENABLED || "false").toLowerCase() === "true",
+    tempAuthUsername: String(process.env.TEMP_AUTH_USERNAME || "").trim(),
+    tempAuthPassword: String(process.env.TEMP_AUTH_PASSWORD || ""),
   };
 }
 

@@ -2200,7 +2200,15 @@ onEl("clientSelect", "change", function () {
 });
 onEl("messageCount", "input", resetPreviewState);
 onEl("previewBtn", "click", generatePreview);
-onEl("executeBtn", "click", executeReprocess);
+onEl("executeBtn", "click", async function() {
+  if (typeof window.openConfirmModal === "function") {
+    var confirmed = await window.openConfirmModal("Deseja reprocessar esta conversa? O payload ser\u00e1 enviado para o webhook da empresa selecionada.");
+    if (!confirmed) {
+      return;
+    }
+  }
+  executeReprocess();
+});
 onEl("clearDiagnosticBtn", "click", resetDiagnostic);
 onEl("refreshHistory", "click", function () {
   renderHistory();

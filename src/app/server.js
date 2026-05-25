@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createChatwootClient } from "../clients/chatwootClient.js";
 import { assertRequiredConfig, getConfig, loadEnvFile } from "../config/config.js";
 import { resolveConversationIdentity } from "../domain/idParser.js";
@@ -50,6 +51,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDirPath = path.resolve(__dirname, "..", "..", "public");
 const indexHtmlPath = path.resolve(publicDirPath, "pages", "index.html");
+const loginHtmlPath = path.resolve(publicDirPath, "pages", "login.html");
 const reprocessadorHtmlPath = path.resolve(publicDirPath, "pages", "reprocessador.html");
 const configuracoesHtmlPath = path.resolve(publicDirPath, "pages", "configuracoes.html");
 const STATIC_CONTENT_TYPES = {
@@ -70,6 +72,359 @@ const STATIC_CONTENT_TYPES = {
   ".map": "application/json; charset=utf-8",
 };
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+const tempAuthFailedAttempts = new Map();
+const TEMP_AUTH_COOKIE_NAME = "ia_temp_auth";
+const TEMP_AUTH_WINDOW_MS = 10 * 60 * 1000;
+const TEMP_AUTH_MAX_ATTEMPTS = 10;
+const TEMP_AUTH_BLOCK_MS = 15 * 60 * 1000;
+const TEMP_AUTH_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+function getClientIp(req) {
+  const xForwardedFor = req.headers["x-forwarded-for"];
+  if (Array.isArray(xForwardedFor) && xForwardedFor.length > 0) {
+    return String(xForwardedFor[0] || "").split(",")[0].trim() || "unknown";
+  }
+
+  if (typeof xForwardedFor === "string") {
+    return String(xForwardedFor).split(",")[0].trim() || "unknown";
+  }
+
+  return String(req.socket?.remoteAddress || "").trim() || "unknown";
+}
+
+function safeEquals(left, right) {
+  const a = Buffer.from(String(left || ""), "utf8");
+  const b = Buffer.from(String(right || ""), "utf8");
+
+  if (a.length !== b.length) {
+    return timingSafeEqual(a, a) && false;
+  }
+
+  return timingSafeEqual(a, b);
+}
+
+function parseBasicAuthHeader(req) {
+  const rawAuth = req.headers.authorization;
+  const header = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
+  if (!header || !String(header).startsWith("Basic ")) {
+    return null;
+  }
+
+  const encoded = String(header).slice(6).trim();
+  if (!encoded) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex <= 0) {
+      return null;
+    }
+
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseCookieHeader(req) {
+  const rawCookie = req.headers.cookie;
+  const header = Array.isArray(rawCookie) ? rawCookie[0] : rawCookie;
+  const result = {};
+  const source = String(header || "");
+
+  if (!source) {
+    return result;
+  }
+
+  const parts = source.split(";");
+  for (const part of parts) {
+    const [rawName, ...rawValue] = part.split("=");
+    const name = String(rawName || "").trim();
+    if (!name) {
+      continue;
+    }
+    const value = rawValue.join("=").trim();
+    try {
+      result[name] = decodeURIComponent(value);
+    } catch {
+      result[name] = value;
+    }
+  }
+
+  return result;
+}
+
+function buildTempAuthSessionSecret(config) {
+  return createHmac("sha256", "ia-infinity-temp-auth-secret")
+    .update(String(config?.tempAuthUsername || ""))
+    .update(":")
+    .update(String(config?.tempAuthPassword || ""))
+    .update(":")
+    .update(String(config?.chatwootApiToken || ""))
+    .digest("hex");
+}
+
+function createTempAuthSessionToken(config) {
+  const now = Date.now();
+  const payload = {
+    sub: String(config.tempAuthUsername || ""),
+    iat: now,
+    exp: now + TEMP_AUTH_SESSION_TTL_MS,
+    nonce: randomBytes(12).toString("hex"),
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = createHmac("sha256", buildTempAuthSessionSecret(config))
+    .update(encodedPayload)
+    .digest("base64url");
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyTempAuthSessionToken(token, config) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 2) {
+    return false;
+  }
+
+  const encodedPayload = parts[0];
+  const receivedSignature = parts[1];
+  if (!encodedPayload || !receivedSignature) {
+    return false;
+  }
+
+  const expectedSignature = createHmac("sha256", buildTempAuthSessionSecret(config))
+    .update(encodedPayload)
+    .digest("base64url");
+  if (!safeEquals(receivedSignature, expectedSignature)) {
+    return false;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    return false;
+  }
+
+  const exp = Number(payload?.exp || 0);
+  const sub = String(payload?.sub || "");
+  if (!Number.isFinite(exp) || exp <= Date.now()) {
+    return false;
+  }
+  if (!safeEquals(sub, String(config?.tempAuthUsername || ""))) {
+    return false;
+  }
+
+  return true;
+}
+
+function readTempAuthSessionFromRequest(req, config) {
+  const cookies = parseCookieHeader(req);
+  const token = String(cookies[TEMP_AUTH_COOKIE_NAME] || "").trim();
+  if (!token) {
+    return false;
+  }
+  return verifyTempAuthSessionToken(token, config);
+}
+
+function buildTempAuthCookie(token, req, { clear = false } = {}) {
+  const secure =
+    String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https" ||
+    Boolean(req.socket?.encrypted);
+  const parts = [`${TEMP_AUTH_COOKIE_NAME}=${encodeURIComponent(clear ? "" : token)}`];
+  parts.push("Path=/");
+  parts.push("HttpOnly");
+  parts.push("SameSite=Lax");
+  if (secure) {
+    parts.push("Secure");
+  }
+  if (clear) {
+    parts.push("Max-Age=0");
+  } else {
+    parts.push(`Max-Age=${Math.floor(TEMP_AUTH_SESSION_TTL_MS / 1000)}`);
+  }
+  return parts.join("; ");
+}
+
+function isHtmlNavigationRequest(req) {
+  const accept = String(req.headers.accept || "");
+  return accept.includes("text/html");
+}
+
+function isTempAuthPublicPath(pathname) {
+  if (pathname === "/login") {
+    return true;
+  }
+
+  if (
+    pathname === "/api/auth/temp/login" ||
+    pathname === "/api/auth/temp/session" ||
+    pathname === "/api/auth/temp/logout"
+  ) {
+    return true;
+  }
+
+  if (pathname === "/health") {
+    return true;
+  }
+
+  if (
+    pathname === "/api/reprocess/n8n/error-callback" ||
+    pathname === "/api/reprocess/n8n/status-callback"
+  ) {
+    return true;
+  }
+
+  if (
+    pathname.startsWith("/assets/") ||
+    pathname.startsWith("/logos/") ||
+    pathname === "/favicon.ico"
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function getTempAuthAttemptEntry(clientIp) {
+  const now = Date.now();
+  const cached = tempAuthFailedAttempts.get(clientIp);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.blockedUntilMs && cached.blockedUntilMs > now) {
+    return cached;
+  }
+
+  if (cached.windowStartedAtMs + cached.windowMs <= now) {
+    tempAuthFailedAttempts.delete(clientIp);
+    return null;
+  }
+
+  return cached;
+}
+
+function registerTempAuthFailure(clientIp) {
+  const now = Date.now();
+  const windowMs = TEMP_AUTH_WINDOW_MS;
+  const maxAttempts = TEMP_AUTH_MAX_ATTEMPTS;
+  const blockMs = TEMP_AUTH_BLOCK_MS;
+  const existing = getTempAuthAttemptEntry(clientIp);
+
+  const entry = existing
+    ? {
+        ...existing,
+        attempts: Number(existing.attempts || 0) + 1,
+      }
+    : {
+        attempts: 1,
+        windowStartedAtMs: now,
+        windowMs,
+        blockedUntilMs: 0,
+      };
+
+  if (entry.attempts >= maxAttempts) {
+    entry.blockedUntilMs = now + blockMs;
+  }
+
+  tempAuthFailedAttempts.set(clientIp, entry);
+  return entry;
+}
+
+function clearTempAuthFailures(clientIp) {
+  if (!clientIp) {
+    return;
+  }
+  tempAuthFailedAttempts.delete(clientIp);
+}
+
+function writeTempAuthUnauthorizedJson(res, statusCode, message) {
+  const payload = JSON.stringify(
+    {
+      success: false,
+      error: "temporary_auth_required",
+      message,
+    },
+    null,
+    2,
+  );
+
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(payload),
+    "Cache-Control": "no-store",
+  });
+  res.end(payload);
+}
+
+function enforceTemporaryAuth(req, res, requestUrl, config) {
+  if (!config?.tempAuthEnabled) {
+    return true;
+  }
+
+  const pathname = requestUrl.pathname;
+
+  if (isTempAuthPublicPath(pathname)) {
+    return true;
+  }
+
+  if (!config?.tempAuthUsername || !config?.tempAuthPassword) {
+    json(res, 500, {
+      success: false,
+      error: "temporary_auth_misconfigured",
+      message: "TEMP_AUTH_ENABLED=true, mas TEMP_AUTH_USERNAME/TEMP_AUTH_PASSWORD nao foram definidos.",
+    });
+    return false;
+  }
+
+  const clientIp = getClientIp(req);
+  const attemptEntry = getTempAuthAttemptEntry(clientIp);
+  const now = Date.now();
+
+  if (attemptEntry?.blockedUntilMs && attemptEntry.blockedUntilMs > now) {
+    writeTempAuthUnauthorizedJson(
+      res,
+      429,
+      "Muitas tentativas de autenticacao. Tente novamente em alguns minutos.",
+    );
+    return false;
+  }
+
+  if (readTempAuthSessionFromRequest(req, config)) {
+    clearTempAuthFailures(clientIp);
+    return true;
+  }
+
+  const parsed = parseBasicAuthHeader(req);
+  const usernameOk = safeEquals(parsed?.username || "", config.tempAuthUsername);
+  const passwordOk = safeEquals(parsed?.password || "", config.tempAuthPassword);
+
+  if (usernameOk && passwordOk) {
+    clearTempAuthFailures(clientIp);
+    return true;
+  }
+
+  registerTempAuthFailure(clientIp);
+
+  if (isHtmlNavigationRequest(req)) {
+    const next = `${requestUrl.pathname}${requestUrl.search || ""}${requestUrl.hash || ""}`;
+    const location = `/login?next=${encodeURIComponent(next || "/reprocessador")}`;
+    res.writeHead(302, {
+      Location: location,
+      "Cache-Control": "no-store",
+    });
+    res.end();
+    return false;
+  }
+
+  writeTempAuthUnauthorizedJson(res, 401, "Autenticacao obrigatoria para acessar este ambiente.");
+  return false;
+}
 
 function toApiErrorResponse(error) {
   if (error instanceof ReprocessApiError) {
@@ -405,8 +760,106 @@ const server = createServer(async (req, res) => {
   const requestUrl = getRequestUrl(req);
   const pathname = requestUrl.pathname;
 
+  if (!enforceTemporaryAuth(req, res, requestUrl, config)) {
+    return;
+  }
+
   if (tryServeStaticAsset(req, res, pathname)) {
     return;
+  }
+
+  if (req.method === "GET" && pathname === "/login") {
+    try {
+      const content = readFileSync(loginHtmlPath, "utf8");
+      return html(res, 200, content);
+    } catch {
+      return json(res, 500, {
+        error: "login_unavailable",
+        message: "Nao foi possivel carregar public/pages/login.html",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/auth/temp/session") {
+    const authenticated = config.tempAuthEnabled
+      ? readTempAuthSessionFromRequest(req, config)
+      : true;
+    return json(res, 200, {
+      success: true,
+      temp_auth_enabled: Boolean(config.tempAuthEnabled),
+      authenticated,
+    });
+  }
+
+  if (req.method === "POST" && pathname === "/api/auth/temp/login") {
+    if (!config.tempAuthEnabled) {
+      return json(res, 200, {
+        success: true,
+        message: "Auth temporaria desativada neste ambiente.",
+      });
+    }
+
+    if (!config?.tempAuthUsername || !config?.tempAuthPassword) {
+      return json(res, 500, {
+        success: false,
+        error: "temporary_auth_misconfigured",
+        message: "TEMP_AUTH_ENABLED=true, mas TEMP_AUTH_USERNAME/TEMP_AUTH_PASSWORD nao foram definidos.",
+      });
+    }
+
+    const clientIp = getClientIp(req);
+    const attemptEntry = getTempAuthAttemptEntry(clientIp);
+    const now = Date.now();
+    if (attemptEntry?.blockedUntilMs && attemptEntry.blockedUntilMs > now) {
+      return json(res, 429, {
+        success: false,
+        error: "temporary_auth_blocked",
+        message: "Muitas tentativas de login. Aguarde alguns minutos e tente novamente.",
+      });
+    }
+
+    try {
+      const input = await readJsonBody(req);
+      const username = String(input?.username || "").trim();
+      const password = String(input?.password || "");
+
+      const usernameOk = safeEquals(username, config.tempAuthUsername);
+      const passwordOk = safeEquals(password, config.tempAuthPassword);
+      if (!usernameOk || !passwordOk) {
+        registerTempAuthFailure(clientIp);
+        return json(res, 401, {
+          success: false,
+          error: "invalid_credentials",
+          message: "Usuario ou senha invalidos.",
+        });
+      }
+
+      clearTempAuthFailures(clientIp);
+      const token = createTempAuthSessionToken(config);
+      const cookie = buildTempAuthCookie(token, req);
+      res.setHeader("Set-Cookie", cookie);
+      return json(res, 200, {
+        success: true,
+        message: "Autenticado com sucesso.",
+      });
+    } catch (error) {
+      const statusCode = Number(error?.statusCode || 400);
+      return json(res, statusCode, {
+        success: false,
+        error: "temporary_auth_login_failed",
+        message: error?.message || "Falha ao processar login.",
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/auth/temp/logout") {
+    if (config.tempAuthEnabled) {
+      res.setHeader("Set-Cookie", buildTempAuthCookie("", req, { clear: true }));
+    }
+    return json(res, 200, {
+      success: true,
+      message: "Sessao encerrada.",
+    });
   }
 
   if (req.method === "GET" && pathname === "/") {
@@ -982,7 +1435,7 @@ const server = createServer(async (req, res) => {
   return json(res, 404, {
     error: "not_found",
     message:
-      "Use GET /, GET /reprocessador, GET /configuracoes, GET /empresas, GET /health, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/chatwoot/messages, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /login, GET /reprocessador, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/temp/session, POST /api/auth/temp/login, POST /api/auth/temp/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/chatwoot/messages, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
 });
 
