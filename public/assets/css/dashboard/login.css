@@ -61,7 +61,8 @@
 }
 
 .login-card .logo-wrap{text-align:center;margin-bottom:28px}
-.login-card .logo-wrap img{height:36px;width:auto;display:inline-block}
+.login-card .logo-wrap img{height:36px;width:auto;display:inline-block;filter:drop-shadow(0 1px 2px color-mix(in oklch, var(--fg) 20%, transparent))}
+[data-theme="dark"] .login-card .logo-wrap img{filter:drop-shadow(0 2px 7px color-mix(in oklch, var(--accent) 24%, transparent)) brightness(1.08)}
 .login-card .logo-wrap .tagline{font-size:.7rem;color:var(--muted);margin-top:6px}
 .login-card h2{font-family:var(--font-display);font-size:1.1rem;font-weight:700;text-align:center;margin-bottom:22px;color:var(--fg)}
 
@@ -154,3 +155,8 @@
 @media(max-width:900px){
   .login-footer{flex-direction:column;gap:3px;text-align:center;padding:10px 14px}
 }
+
+
+.login-page.auth-checking .login-card,
+.login-page.auth-checking .login-footer{opacity:0;pointer-events:none}
+

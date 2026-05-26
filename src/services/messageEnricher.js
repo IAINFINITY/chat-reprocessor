@@ -61,6 +61,30 @@ function getAttachmentUrl(attachment) {
   );
 }
 
+function getAttachmentLabel(attachment) {
+  const fileName =
+    attachment?.file_name ||
+    attachment?.filename ||
+    attachment?.name ||
+    attachment?.id ||
+    "arquivo";
+  return String(fileName).trim() || "arquivo";
+}
+
+function createEmptyMediaMeta({ selectedMessages = 0, mediaAiEnabled = false } = {}) {
+  return {
+    selected_messages: Number(selectedMessages || 0),
+    text_messages: 0,
+    audio_attachments: 0,
+    image_attachments: 0,
+    other_attachments: 0,
+    media_ai_enabled: Boolean(mediaAiEnabled),
+    audio_transcribed: 0,
+    image_described: 0,
+    attachment_fallbacks: 0,
+  };
+}
+
 async function downloadAttachmentBuffer(url, chatwootApiToken) {
   if (!url) {
     return null;
@@ -156,8 +180,13 @@ Sua descricao deve se conectar ao contexto acima e manter o sentido da conversa.
 async function enrichMessage(message, { openaiClient, config, chatwootApiToken }) {
   const textParts = [];
   const rawText = String(message?.content || "").trim();
+  const meta = createEmptyMediaMeta({
+    selectedMessages: 1,
+    mediaAiEnabled: Boolean(config?.enableMediaAi),
+  });
   if (rawText) {
     textParts.push(rawText);
+    meta.text_messages += 1;
   }
 
   const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
@@ -168,6 +197,7 @@ async function enrichMessage(message, { openaiClient, config, chatwootApiToken }
 
     try {
       if (type === "audio") {
+        meta.audio_attachments += 1;
         const transcript = await transcribeAudio({
           openaiClient,
           config,
@@ -175,7 +205,9 @@ async function enrichMessage(message, { openaiClient, config, chatwootApiToken }
           chatwootApiToken,
         });
         textParts.push(transcript);
+        meta.audio_transcribed += 1;
       } else if (type === "image") {
+        meta.image_attachments += 1;
         const description = await describeImage({
           openaiClient,
           config,
@@ -184,6 +216,11 @@ async function enrichMessage(message, { openaiClient, config, chatwootApiToken }
           messageText: rawText,
         });
         textParts.push(description);
+        meta.image_described += 1;
+      } else {
+        meta.other_attachments += 1;
+        textParts.push(`[anexo recebido: ${getAttachmentLabel(attachment)}]`);
+        meta.attachment_fallbacks += 1;
       }
     } catch (error) {
       console.error(
@@ -198,11 +235,40 @@ async function enrichMessage(message, { openaiClient, config, chatwootApiToken }
           error_message: error?.message || "erro desconhecido",
         }),
       );
-      textParts.push(type === "audio" ? "[audio recebido]" : "[imagem recebida]");
+      if (type === "audio") {
+        meta.audio_attachments += 1;
+        textParts.push("[audio recebido]");
+      } else if (type === "image") {
+        meta.image_attachments += 1;
+        textParts.push("[imagem recebida]");
+      } else {
+        meta.other_attachments += 1;
+        textParts.push(`[anexo recebido: ${getAttachmentLabel(attachment)}]`);
+      }
+      meta.attachment_fallbacks += 1;
     }
   }
 
-  return textParts.join("\n").trim();
+  return {
+    text: textParts.join("\n").trim(),
+    meta,
+  };
+}
+
+function mergeMediaMeta(baseMeta, nextMeta) {
+  const result = { ...baseMeta };
+  if (!nextMeta || typeof nextMeta !== "object") {
+    return result;
+  }
+
+  result.text_messages += Number(nextMeta.text_messages || 0);
+  result.audio_attachments += Number(nextMeta.audio_attachments || 0);
+  result.image_attachments += Number(nextMeta.image_attachments || 0);
+  result.other_attachments += Number(nextMeta.other_attachments || 0);
+  result.audio_transcribed += Number(nextMeta.audio_transcribed || 0);
+  result.image_described += Number(nextMeta.image_described || 0);
+  result.attachment_fallbacks += Number(nextMeta.attachment_fallbacks || 0);
+  return result;
 }
 
 export async function buildMergedUserText({
@@ -212,13 +278,41 @@ export async function buildMergedUserText({
   config,
   chatwootApiToken,
 }) {
+  const result = await buildMergedUserTextWithMeta({
+    allMessages,
+    messageCount,
+    openaiClient,
+    config,
+    chatwootApiToken,
+  });
+
+  return String(result?.text || "").trim();
+}
+
+export async function buildMergedUserTextWithMeta({
+  allMessages,
+  messageCount,
+  openaiClient,
+  config,
+  chatwootApiToken,
+}) {
   const incoming = sortByNewest((allMessages || []).filter(isIncomingUserMessage));
   if (incoming.length === 0) {
-    return "";
+    return {
+      text: "",
+      meta: createEmptyMediaMeta({
+        selectedMessages: 0,
+        mediaAiEnabled: Boolean(config?.enableMediaAi),
+      }),
+    };
   }
 
   const selected = incoming.slice(0, normalizeMessageCount(messageCount)).reverse();
   const parts = [];
+  let mediaMeta = createEmptyMediaMeta({
+    selectedMessages: selected.length,
+    mediaAiEnabled: Boolean(config?.enableMediaAi),
+  });
 
   for (const message of selected) {
     if (config?.enableMediaAi) {
@@ -227,18 +321,41 @@ export async function buildMergedUserText({
         config,
         chatwootApiToken,
       });
-      if (enriched) {
-        parts.push(enriched);
+      mediaMeta = mergeMediaMeta(mediaMeta, enriched?.meta);
+      if (enriched?.text) {
+        parts.push(enriched.text);
       }
       continue;
     }
 
+    const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const fallback = String(message?.content || "").trim();
     if (fallback) {
       parts.push(fallback);
+      mediaMeta.text_messages += 1;
+    }
+
+    for (const attachment of attachments) {
+      const type = attachmentTypeOf(attachment);
+      if (type === "audio") {
+        mediaMeta.audio_attachments += 1;
+        mediaMeta.attachment_fallbacks += 1;
+        parts.push("[audio recebido]");
+      } else if (type === "image") {
+        mediaMeta.image_attachments += 1;
+        mediaMeta.attachment_fallbacks += 1;
+        parts.push("[imagem recebida]");
+      } else {
+        mediaMeta.other_attachments += 1;
+        mediaMeta.attachment_fallbacks += 1;
+        parts.push(`[anexo recebido: ${getAttachmentLabel(attachment)}]`);
+      }
     }
   }
 
-  return parts.join("\n").trim();
+  return {
+    text: parts.join("\n").trim(),
+    meta: mediaMeta,
+  };
 }
 

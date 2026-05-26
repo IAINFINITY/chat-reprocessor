@@ -9,7 +9,7 @@ import {
   getReprocessClient,
 } from "../domain/reprocessClients.js";
 import { getWebhookHeaderTemplate } from "../domain/webhookResolver.js";
-import { buildMergedUserText } from "../services/messageEnricher.js";
+import { buildMergedUserTextWithMeta } from "../services/messageEnricher.js";
 import { checkClientPauseStatus } from "../services/pauseChecker.js";
 
 export class ReprocessApiError extends Error {
@@ -546,13 +546,14 @@ export async function buildReprocessPreview({ input, config }) {
 
   const contact = pickContact(conversation, messagesResponse, latestUserMessage);
   const openaiClient = createOpenAiClient(config);
-  const mergedUserText = await buildMergedUserText({
+  const mergedResult = await buildMergedUserTextWithMeta({
     allMessages: mergedMessages,
     messageCount,
     openaiClient,
     config,
     chatwootApiToken: config.chatwootApiToken,
   });
+  const mergedUserText = String(mergedResult?.text || "").trim();
   const webhookBody = buildWebhookLikeBody({
     accountId,
     conversationId,
@@ -566,6 +567,15 @@ export async function buildReprocessPreview({ input, config }) {
     webhookUrl: selectedClient.webhookUrl,
     headers: getWebhookHeaderTemplate(),
   });
+  const previewItem = Array.isArray(payloadCompleto) ? payloadCompleto[0] : null;
+  if (previewItem && typeof previewItem === "object") {
+    previewItem.preview_meta = {
+      selected_client: selectedClient.key,
+      message_count: messageCount,
+      generated_at: new Date().toISOString(),
+      media: mergedResult?.meta || null,
+    };
+  }
 
   return payloadCompleto;
 }

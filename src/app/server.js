@@ -539,6 +539,23 @@ function getRequestUrl(req) {
   return new URL(rawPath, `http://${host}`);
 }
 
+function resolveSafeNextPath(rawNext) {
+  const next = String(rawNext || "").trim();
+  if (!next) {
+    return "/reprocessador";
+  }
+
+  if (!next.startsWith("/") || next.startsWith("//")) {
+    return "/reprocessador";
+  }
+
+  if (next.startsWith("/login")) {
+    return "/reprocessador";
+  }
+
+  return next;
+}
+
 async function readJsonBody(req) {
   const chunks = [];
   let totalBytes = 0;
@@ -769,6 +786,16 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/login") {
+    if (config.tempAuthEnabled && readTempAuthSessionFromRequest(req, config)) {
+      const nextPath = resolveSafeNextPath(requestUrl.searchParams.get("next"));
+      res.writeHead(302, {
+        Location: nextPath,
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return;
+    }
+
     try {
       const content = readFileSync(loginHtmlPath, "utf8");
       return html(res, 200, content);

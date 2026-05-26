@@ -133,7 +133,7 @@
               </div>
               <div class="field">
                 <label for="messageCount">Mensagens a processar</label>
-                <input id="messageCount" type="number" min="1" max="20" step="1" value="3">
+                <input id="messageCount" type="number" min="1" max="20" step="1" value="1">
               </div>
             </div>
             <div class="company-logo-area" id="companyLogoArea">
@@ -176,6 +176,18 @@
               </section>
               <section class="card card-json stagger-fade stagger-fade-d2">
                 <div class="card-title">JSON de envio ao n8n</div>
+                <div class="field full" style="margin-top:10px">
+                  <label for="editedMessage">Mensagem editável para reprocesso</label>
+                  <textarea id="editedMessage" rows="4" placeholder="Ajuste a mensagem que será enviada para o n8n antes de reprocessar."></textarea>
+                </div>
+                <div class="actions-row" style="margin-top:8px">
+                  <button id="applyEditedMessageBtn" class="btn btn-ghost btn-sm">Aplicar edição no JSON</button>
+                  <button id="resetEditedMessageBtn" class="btn btn-ghost btn-sm">Restaurar original</button>
+                </div>
+                <div class="status-bar" id="mediaStatusBar" style="margin-top:10px">
+                  <span class="status-dot"></span>
+                  <span id="mediaStatusText">Sem mídia detectada nas mensagens selecionadas.</span>
+                </div>
                 <div class="json-block">
                   <pre id="output">{}</pre>
                 </div>

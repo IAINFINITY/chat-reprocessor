@@ -46,7 +46,7 @@ function setLogoSrc(isDark) {
   if (!loginLogo) {
     return;
   }
-  loginLogo.src = isDark ? "/logos/iainfinitylogo.svg" : "/logos/iainfinityclarologo.svg";
+  loginLogo.src = "/logos/iainfinityclarologo.svg";
 }
 
 function setTheme(theme) {
@@ -106,8 +106,10 @@ async function checkExistingSession() {
     var data = await readJsonSafe(response);
     if (response.ok && data && data.success && data.authenticated) {
       window.location.replace(readNextUrl());
+      return true;
     }
   } catch {}
+  return false;
 }
 
 function setLoading(enabled) {
@@ -289,10 +291,18 @@ function initLoginForm() {
   }
 }
 
-(function init() {
+(async function init() {
+  var loginPage = document.querySelector(".login-page");
+  if (loginPage) {
+    loginPage.classList.add("auth-checking");
+  }
+
   initTheme();
   initLoginForm();
-  checkExistingSession();
+  var redirected = await checkExistingSession();
+  if (!redirected && loginPage) {
+    loginPage.classList.remove("auth-checking");
+  }
 })();
 
 })();

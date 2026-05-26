@@ -16,9 +16,14 @@ var COMPANY_LOGO_STYLE = {
   "akila": "ink-dark",
 };
 
+var HISTORY_STORAGE_KEY = "ia_reprocess_history_v1";
+var ACTIVITY_STORAGE_KEY = "ia_reprocess_activity_v1";
+
 var state = {
   clients: [],
   previewPayload: null,
+  previewOriginalPayload: null,
+  previewMediaMeta: null,
   previewClientKey: "",
   lastDiagnosticContext: null,
   monitorTimer: null,
@@ -106,6 +111,11 @@ var el = {};
   "historyPagination",
   "refreshHistory",
   "summaryBadge",
+  "editedMessage",
+  "applyEditedMessageBtn",
+  "resetEditedMessageBtn",
+  "mediaStatusBar",
+  "mediaStatusText",
   "statSuccess",
   "statErrors",
   "statPending",
@@ -136,6 +146,25 @@ function wait(ms) {
 function safeText(value, fallback) {
   var text = String(value == null ? "" : value).trim();
   return text || fallback;
+}
+
+function readStorageJson(key, fallback) {
+  try {
+    var raw = localStorage.getItem(key);
+    if (!raw) {
+      return fallback;
+    }
+    var parsed = JSON.parse(raw);
+    return parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorageJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
 }
 
 function normalizeLegacyPtBr(value) {
@@ -198,6 +227,119 @@ function formatClientKeyForDisplay(value) {
     return "-";
   }
   return key;
+}
+
+function deepClone(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function getPreviewItem(payload) {
+  if (Array.isArray(payload)) {
+    return payload[0] || null;
+  }
+  if (payload && typeof payload === "object") {
+    return payload;
+  }
+  return null;
+}
+
+function getPreviewWebhookBody(payload) {
+  var item = getPreviewItem(payload);
+  if (!item) {
+    return null;
+  }
+  var body = item.body;
+  if (body && typeof body === "object") {
+    return body;
+  }
+  return item;
+}
+
+function extractPreviewMainMessage(payload) {
+  var body = getPreviewWebhookBody(payload);
+  var firstMessage = body && body.messages && body.messages[0];
+  return safeText(firstMessage && firstMessage.content, "");
+}
+
+function applyEditedMessageToPayload(payload, messageText) {
+  var nextPayload = deepClone(payload);
+  var item = getPreviewItem(nextPayload);
+  if (!item || !item.body || !Array.isArray(item.body.messages) || !item.body.messages[0]) {
+    return nextPayload;
+  }
+
+  var nextText = safeText(messageText, "");
+  item.body.messages[0].content = nextText;
+  item.body.messages[0].processed_message_content = nextText;
+  if (item.preview_meta && typeof item.preview_meta === "object") {
+    item.preview_meta.edited_by_operator = true;
+    item.preview_meta.edited_at = new Date().toISOString();
+  }
+
+  return nextPayload;
+}
+
+function renderMediaStatus(mediaMeta) {
+  if (!hasEl("mediaStatusText") || !hasEl("mediaStatusBar")) {
+    return;
+  }
+
+  var meta = mediaMeta && typeof mediaMeta === "object" ? mediaMeta : null;
+  if (!meta) {
+    el.mediaStatusText.textContent = "Sem mídia detectada nas mensagens selecionadas.";
+    el.mediaStatusBar.classList.remove("is-visible", "is-error");
+    return;
+  }
+
+  var audioCount = Number(meta.audio_attachments || 0);
+  var imageCount = Number(meta.image_attachments || 0);
+  var otherCount = Number(meta.other_attachments || 0);
+  var textCount = Number(meta.text_messages || 0);
+  var selectedCount = Number(meta.selected_messages || 0);
+  var aiEnabled = Boolean(meta.media_ai_enabled);
+
+  if (audioCount + imageCount + otherCount <= 0) {
+    el.mediaStatusText.textContent =
+      "Sem mídia detectada. " +
+      String(textCount) +
+      " mensagem(ns) de texto em " +
+      String(selectedCount) +
+      " item(ns) selecionado(s).";
+    el.mediaStatusBar.classList.remove("is-error");
+    el.mediaStatusBar.classList.add("is-visible");
+    return;
+  }
+
+  var parts = [];
+  if (audioCount > 0) {
+    parts.push(String(audioCount) + " áudio(s)");
+  }
+  if (imageCount > 0) {
+    parts.push(String(imageCount) + " imagem(ns)");
+  }
+  if (otherCount > 0) {
+    parts.push(String(otherCount) + " anexo(s)");
+  }
+
+  var modeText = aiEnabled
+    ? "IA habilitada para transcrever/descrever mídia."
+    : "IA de mídia desabilitada (será usado fallback textual).";
+
+  el.mediaStatusText.textContent =
+    "Mídia detectada: " + parts.join(", ") + ". " + modeText;
+  el.mediaStatusBar.classList.remove("is-error");
+  el.mediaStatusBar.classList.add("is-visible");
+}
+
+function syncEditedMessageInputFromPayload(payload) {
+  if (!hasEl("editedMessage")) {
+    return;
+  }
+  el.editedMessage.value = extractPreviewMainMessage(payload);
 }
 
 function stripJsonFromText(value) {
@@ -697,6 +839,32 @@ function stopMonitor() {
   state.monitorStartedAt = 0;
 }
 
+function hasConfirmedChatReturn() {
+  return Array.isArray(state.chatNewOutgoingMessages) && state.chatNewOutgoingMessages.length > 0;
+}
+
+function getHistoryStatusByRequestId(requestId) {
+  var needle = safeText(requestId, "");
+  if (!needle) {
+    return "";
+  }
+  var item = state.history.find(function (entry) {
+    return safeText(entry && entry.requestId, "") === needle;
+  });
+  return item ? normalizeHistoryStatus(item.status) : "";
+}
+
+function hasActiveRunInProgress() {
+  if (!state.activeRunRequestId) {
+    return false;
+  }
+  var status = getHistoryStatusByRequestId(state.activeRunRequestId);
+  if (status === "success" || status === "error") {
+    return false;
+  }
+  return Boolean(state.monitorTimer || state.chatMonitorTimer);
+}
+
 function stopN8nEventsPolling() {
   if (state.n8nEventsTimer) {
     clearInterval(state.n8nEventsTimer);
@@ -816,6 +984,75 @@ function isRunningTimelineEvent(event) {
   );
 }
 
+function getEventsByRequestId(requestId) {
+  var needle = safeText(requestId, "");
+  if (!needle) {
+    return [];
+  }
+  return (Array.isArray(state.n8nEvents) ? state.n8nEvents : []).filter(function (event) {
+    return safeText(event && event.request_id, "") === needle;
+  });
+}
+
+function resolveFinalEventFromRequestEvents(events) {
+  var rows = Array.isArray(events) ? events : [];
+  for (var i = 0; i < rows.length; i += 1) {
+    var event = rows[i];
+    if (isFinalTimelineEvent(event)) {
+      return event;
+    }
+  }
+  return null;
+}
+
+function reconcileActiveRunFromTimeline() {
+  if (!state.activeRunRequestId) {
+    return;
+  }
+
+  var events = getEventsByRequestId(state.activeRunRequestId);
+  if (events.length === 0) {
+    return;
+  }
+
+  var finalEvent = resolveFinalEventFromRequestEvents(events);
+  if (finalEvent) {
+    var type = toTimelineType(finalEvent);
+    if (type === "success") {
+      setPipelineStep(4);
+      setStatus("Fluxo concluído no n8n.", false);
+      updateHistoryByRequestId(
+        state.activeRunRequestId,
+        "success",
+        safeText(finalEvent.likely_cause, "Fluxo concluído."),
+      );
+      stopMonitor();
+      stopChatMonitor();
+      return;
+    }
+
+    if (type === "error") {
+      setPipelineStep(4);
+      setStatus("Fluxo finalizado com erro no n8n.", true);
+      updateHistoryByRequestId(
+        state.activeRunRequestId,
+        "error",
+        safeText(finalEvent.likely_cause, "Fluxo finalizado com erro."),
+      );
+      stopMonitor();
+      stopChatMonitor();
+      return;
+    }
+  }
+
+  if (hasConfirmedChatReturn()) {
+    setPipelineStep(4);
+    setStatus("Fluxo finalizado com retorno confirmado no Chatwoot.", false);
+    updateHistoryByRequestId(state.activeRunRequestId, "success", "Retorno confirmado no Chatwoot.");
+    stopMonitor();
+  }
+}
+
 function collapseTimelineNoise(events) {
   var rows = Array.isArray(events) ? events : [];
   var hasFinalByRequest = new Set();
@@ -916,6 +1153,7 @@ function pushLocalN8nTimelineEvent(event) {
   state.n8nEvents = merged.slice(0, 100);
   state.n8nEventsFingerprint = buildN8nEventsFingerprint(state.n8nEvents);
   renderN8nEvents();
+  reconcileActiveRunFromTimeline();
 }
 
 function applyTimelineTypeClass(node, type) {
@@ -1030,6 +1268,7 @@ async function fetchN8nEvents(options) {
     state.n8nEvents = combined;
     state.n8nEventsFingerprint = fingerprint;
     renderN8nEvents();
+    reconcileActiveRunFromTimeline();
   } catch {
     if (!silent) {
       setStatus("Falha de rede ao atualizar timeline n8n.", true);
@@ -1071,6 +1310,8 @@ function resetDiagnostic() {
 
 function resetPreviewState() {
   state.previewPayload = null;
+  state.previewOriginalPayload = null;
+  state.previewMediaMeta = null;
   state.previewClientKey = "";
   state.pauseStatusPreview = null;
   el.executeBtn.disabled = true;
@@ -1079,6 +1320,10 @@ function resetPreviewState() {
   state.currentConversationUrl = "";
   resetChatState();
   renderPauseSummary(null);
+  renderMediaStatus(null);
+  if (hasEl("editedMessage")) {
+    el.editedMessage.value = "";
+  }
   setChatPreviewStatus("Aguardando preview da conversa...");
   setPipelineStep(0);
 }
@@ -1229,8 +1474,53 @@ function pushHistory(status, message) {
   };
   state.history.unshift(item);
   state.historyPage = 1;
+  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
   renderHistory();
   return item.id;
+}
+
+function normalizeHistoryStatus(value) {
+  var status = safeText(value, "").toLowerCase();
+  if (status === "failed") {
+    return "error";
+  }
+  if (status === "running" || status === "pending" || status === "new" || status === "waiting") {
+    return "warning";
+  }
+  if (status === "success") {
+    return "success";
+  }
+  if (status === "error") {
+    return "error";
+  }
+  return "warning";
+}
+
+function shouldReplaceHistoryStatus(currentStatus, nextStatus) {
+  var current = normalizeHistoryStatus(currentStatus);
+  var next = normalizeHistoryStatus(nextStatus);
+
+  if (current === next) {
+    return true;
+  }
+
+  if (current === "success" && next !== "success") {
+    return false;
+  }
+
+  if (next === "success") {
+    return true;
+  }
+
+  if (current === "error" && next === "warning") {
+    return false;
+  }
+
+  if (current === "warning" && next === "error") {
+    return true;
+  }
+
+  return true;
 }
 
 function updateHistoryByRequestId(requestId, status, message) {
@@ -1257,8 +1547,11 @@ function updateHistoryByRequestId(requestId, status, message) {
     }
   }
 
-  state.history[idx].status = status;
+  if (shouldReplaceHistoryStatus(state.history[idx].status, status)) {
+    state.history[idx].status = normalizeHistoryStatus(status);
+  }
   state.history[idx].duration = duration;
+  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
   renderHistory();
   return true;
 }
@@ -1270,6 +1563,8 @@ function pushActivity(type, title, desc) {
     desc: desc,
     time: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
   });
+  state.activity = state.activity.slice(0, 200);
+  writeStorageJson(ACTIVITY_STORAGE_KEY, state.activity);
   renderActivity();
 }
 
@@ -1623,7 +1918,12 @@ async function generatePreview() {
     }
 
     state.previewPayload = data;
+    state.previewOriginalPayload = deepClone(data);
     state.previewClientKey = resolveClientKeyFromPreviewPayload(data, selectedClient);
+    var previewItem = getPreviewItem(data);
+    state.previewMediaMeta = previewItem && previewItem.preview_meta && previewItem.preview_meta.media
+      ? previewItem.preview_meta.media
+      : null;
 
     var clientMeta = state.clients.find(function (client) {
       return client.key === state.previewClientKey;
@@ -1634,6 +1934,41 @@ async function generatePreview() {
       : formatClientKeyForDisplay(state.previewClientKey);
 
     fillSummary(data);
+    syncEditedMessageInputFromPayload(state.previewPayload);
+    renderMediaStatus(state.previewMediaMeta);
+    if (state.previewMediaMeta) {
+      var mediaMeta = state.previewMediaMeta;
+      var audioCount = Number(mediaMeta.audio_attachments || 0);
+      var imageCount = Number(mediaMeta.image_attachments || 0);
+      var otherCount = Number(mediaMeta.other_attachments || 0);
+      var mediaAiEnabled = Boolean(mediaMeta.media_ai_enabled);
+
+      if (audioCount > 0) {
+        pushActivity(
+          "warning",
+          "Áudio detectado",
+          mediaAiEnabled
+            ? "Áudio identificado e processado para texto no backend."
+            : "Áudio identificado. IA de mídia desligada, usando fallback textual.",
+        );
+      }
+      if (imageCount > 0) {
+        pushActivity(
+          "warning",
+          "Imagem detectada",
+          mediaAiEnabled
+            ? "Imagem identificada e descrita no contexto da conversa."
+            : "Imagem identificada. IA de mídia desligada, usando fallback textual.",
+        );
+      }
+      if (otherCount > 0) {
+        pushActivity(
+          "warning",
+          "Anexo detectado",
+          "Anexo(s) genérico(s) detectado(s). Conteúdo foi marcado com fallback no texto.",
+        );
+      }
+    }
     showCards(true);
     el.executeBtn.disabled = !(state.previewPayload && state.previewClientKey);
     var pausePreview = await fetchPauseStatusPreview({
@@ -1999,11 +2334,19 @@ function startPostExecuteMonitor() {
       return;
     }
 
+    if (state.activeRunRequestId) {
+      var currentHistoryStatus = getHistoryStatusByRequestId(state.activeRunRequestId);
+      if (currentHistoryStatus === "success" || currentHistoryStatus === "error") {
+        stopMonitor();
+        return;
+      }
+    }
+
     var elapsed = Date.now() - state.monitorStartedAt;
     if (elapsed > 600000) {
       setPipelineStep(4);
       setStatus("Monitor do fluxo encerrado por timeout (10 min).", true);
-      pushActivity("warning", "Monitor encerrado", "Nao foi possivel confirmar conclusao do fluxo dentro do tempo limite.");
+      pushActivity("warning", "Monitor encerrado", "Não foi possível confirmar a conclusão do fluxo dentro do tempo limite.");
       showToast("Monitor encerrado por timeout. Consulte o n8n para detalhes.", "error");
       updateHistoryByRequestId(state.activeRunRequestId, "warning", "Monitor encerrado por timeout sem status final do n8n.");
       stopMonitor();
@@ -2016,10 +2359,10 @@ function startPostExecuteMonitor() {
       if (executionEvent) {
         if (executionEvent.status === "success") {
           setPipelineStep(4);
-          setStatus("Fluxo concluido no n8n.", false);
+          setStatus("Fluxo concluído no n8n.", false);
           pushActivity("success", "Fluxo concluído", safeText(executionEvent.likely_cause, "Execução finalizada."));
-          showToast("Reprocessamento concluido no n8n.", "success");
-          updateHistoryByRequestId(state.activeRunRequestId, "success", "Fluxo concluido no n8n.");
+          showToast("Reprocessamento concluído no n8n.", "success");
+          updateHistoryByRequestId(state.activeRunRequestId, "success", "Fluxo concluído no n8n.");
           stopMonitor();
           return;
         }
@@ -2036,6 +2379,13 @@ function startPostExecuteMonitor() {
 
         if (executionEvent.status === "running" || executionEvent.status === "new" || executionEvent.status === "waiting") {
           state.monitorRunningTicks += 1;
+          if (hasConfirmedChatReturn()) {
+            setPipelineStep(4);
+            setStatus("Retorno confirmado no Chatwoot. Encerrando monitor.", false);
+            updateHistoryByRequestId(state.activeRunRequestId, "success", "Retorno confirmado no Chatwoot.");
+            stopMonitor();
+            return;
+          }
         }
       }
 
@@ -2060,10 +2410,9 @@ function startPostExecuteMonitor() {
         }
       }
 
-      if (state.monitorRunningTicks >= 6) {
-        setStatus("Fluxo ainda em andamento no n8n. Último status de execução continua como running.", true);
+      if (state.monitorRunningTicks >= 10) {
+        setStatus("Fluxo ainda em andamento no n8n. Aguardando conclusão final...", false);
         pushActivity("warning", "Fluxo em andamento", "Execução segue como running por mais tempo que o esperado.");
-        showToast("Fluxo ainda em andamento. Verifique detalhes no n8n.", "error");
         updateHistoryByRequestId(state.activeRunRequestId, "warning", "Fluxo em andamento no n8n (sem status final ainda).");
         state.monitorRunningTicks = 0;
       }
@@ -2082,6 +2431,22 @@ async function executeReprocess() {
     return;
   }
 
+  if (hasActiveRunInProgress()) {
+    setStatus("Já existe um reprocessamento em andamento nesta sessão. Aguarde a finalização.", true);
+    showToast("Aguarde o reprocessamento atual finalizar antes de iniciar outro.", "error");
+    return;
+  }
+
+  if (hasEl("editedMessage")) {
+    var currentPayloadMessage = extractPreviewMainMessage(state.previewPayload);
+    var typedMessage = safeText(el.editedMessage.value, "");
+    if (typedMessage && typedMessage !== currentPayloadMessage) {
+      state.previewPayload = applyEditedMessageToPayload(state.previewPayload, typedMessage);
+      el.output.textContent = JSON.stringify(state.previewPayload, null, 2);
+      fillSummary(state.previewPayload);
+    }
+  }
+
   el.executeBtn.disabled = true;
   resetDiagnostic();
   state.activeRunRequestId = "";
@@ -2091,6 +2456,9 @@ async function executeReprocess() {
   setChatBaselineFromMessages(state.chatMessages);
   renderChatMessages({ suppressAnimations: true });
   setPipelineStep(3);
+  el.output.textContent = JSON.stringify(state.previewPayload, null, 2);
+  pushActivity("warning", "Reprocessamento iniciado", "Payload em envio para o webhook e monitoramento ativado.");
+  showToast("Reprocessamento iniciado. Acompanhe a timeline.", "success");
   setChatPreviewStatus("Reprocesso iniciado. Monitorando novas mensagens no Chatwoot...");
   setStatus("Enviando payload para o webhook...", false);
 
@@ -2150,12 +2518,16 @@ async function executeReprocess() {
       pushHistory("warning", data.message || "Contato pausado");
       pushActivity("warning", "Contato pausado", data.message || "Reprocessamento não enviado.");
       setStatus(data.message || "Contato pausado.", true);
-      showToast(data.message || "Contato pausado. Reprocessamento nao enviado.", "error");
+      showToast(data.message || "Contato pausado. Reprocessamento não enviado.", "error");
       return;
     }
 
     state.activeRunRequestId = safeText(data.request_id, "");
     state.activeRunStartedAt = Date.now();
+    state.n8nFilterRequest = state.activeRunRequestId;
+    if (hasEl("n8nRequestFilter")) {
+      el.n8nRequestFilter.value = state.activeRunRequestId;
+    }
     pushHistory("warning", "Payload enviado ao webhook. Aguardando conclusão do fluxo.");
     startPostExecuteMonitor();
     startChatPostReprocessMonitor();
@@ -2174,6 +2546,41 @@ async function executeReprocess() {
   } finally {
     el.executeBtn.disabled = false;
   }
+}
+
+function applyEditedMessageIntoPreview() {
+  if (!state.previewPayload) {
+    setStatus("Gere o preview antes de editar a mensagem.", true);
+    return;
+  }
+  if (!hasEl("editedMessage")) {
+    return;
+  }
+
+  var editedText = safeText(el.editedMessage.value, "");
+  if (!editedText) {
+    setStatus("A mensagem editada não pode ficar vazia.", true);
+    return;
+  }
+
+  state.previewPayload = applyEditedMessageToPayload(state.previewPayload, editedText);
+  el.output.textContent = JSON.stringify(state.previewPayload, null, 2);
+  fillSummary(state.previewPayload);
+  setStatus("Mensagem editada aplicada ao JSON de envio.", false);
+  pushActivity("success", "Mensagem ajustada", "A mensagem a ser reprocessada foi atualizada manualmente.");
+}
+
+function restoreEditedMessageFromOriginal() {
+  if (!state.previewOriginalPayload) {
+    return;
+  }
+
+  state.previewPayload = deepClone(state.previewOriginalPayload);
+  syncEditedMessageInputFromPayload(state.previewPayload);
+  el.output.textContent = JSON.stringify(state.previewPayload, null, 2);
+  fillSummary(state.previewPayload);
+  setStatus("Mensagem original restaurada no payload.", false);
+  pushActivity("warning", "Mensagem restaurada", "O payload voltou para a versão original do preview.");
 }
 
 onEl("copyBtn", "click", async function () {
@@ -2200,6 +2607,12 @@ onEl("clientSelect", "change", function () {
 });
 onEl("messageCount", "input", resetPreviewState);
 onEl("previewBtn", "click", generatePreview);
+onEl("applyEditedMessageBtn", "click", function () {
+  applyEditedMessageIntoPreview();
+});
+onEl("resetEditedMessageBtn", "click", function () {
+  restoreEditedMessageFromOriginal();
+});
 onEl("executeBtn", "click", async function() {
   if (typeof window.openConfirmModal === "function") {
     var confirmed = await window.openConfirmModal("Deseja reprocessar esta conversa? O payload ser\u00e1 enviado para o webhook da empresa selecionada.");
@@ -2257,6 +2670,18 @@ onEl("n8nLookupBtn", "click", function () {
   }
   showCards(false);
   resetPreviewState();
+  var persistedHistory = readStorageJson(HISTORY_STORAGE_KEY, []);
+  if (Array.isArray(persistedHistory)) {
+    state.history = persistedHistory.filter(function (item) {
+      return item && typeof item === "object";
+    }).slice(0, 200);
+  }
+  var persistedActivity = readStorageJson(ACTIVITY_STORAGE_KEY, []);
+  if (Array.isArray(persistedActivity)) {
+    state.activity = persistedActivity.filter(function (item) {
+      return item && typeof item === "object";
+    }).slice(0, 200);
+  }
   renderHistory();
   renderActivity();
   el.n8nTypeFilter.value = "all";
@@ -2264,6 +2689,10 @@ onEl("n8nLookupBtn", "click", function () {
   renderN8nEvents();
   el.output.textContent = "{}";
   el.resolvedClient.value = "-";
+  if (hasEl("messageCount")) {
+    var normalizedCount = parseMessageCount();
+    el.messageCount.value = String(normalizedCount > 0 ? normalizedCount : 1);
+  }
   fetchN8nEvents({ silent: true, limit: 30 });
   startN8nEventsPolling();
   loadClients();
