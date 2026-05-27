@@ -26,6 +26,10 @@
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
         <span>Dashboard</span>
       </a>
+      <a data-page="ajuda" href="#ajuda">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>Ajuda</span>
+      </a>
       <a data-page="configuracoes" href="#configuracoes">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>Configurações</span>
@@ -143,9 +147,25 @@
               <button id="previewBtn" class="btn btn-primary">Gerar JSON de preview</button>
               <button id="executeBtn" class="btn btn-secondary" disabled>Reprocessar</button>
             </div>
+            <div class="preview-progress" id="previewProgressWrap" aria-live="polite">
+              <div class="preview-progress-head">
+                <span id="previewProgressText">Preparando preview...</span>
+                <span id="previewProgressValue">0%</span>
+              </div>
+              <div class="preview-progress-track">
+                <div class="preview-progress-fill" id="previewProgressBar"></div>
+              </div>
+            </div>
+            <div class="pause-warning" id="pauseWarningBox" role="alert">
+              <strong>Contato pausado no Supabase.</strong>
+              <span id="pauseWarningText">Remova o contato da IA pausada para liberar o reprocessamento.</span>
+            </div>
             <div class="status-bar" id="statusBar">
               <span class="status-dot"></span>
               <span id="statusText">Insira o link da conversa para começar.</span>
+            </div>
+            <div class="scope-note" role="note">
+              <strong>Escopo atual:</strong> este reprocessador opera somente com conversas de <strong>WhatsApp</strong> no Chatwoot.
             </div>
           </section>
         </div>
@@ -173,6 +193,9 @@
                   <tr><td>Status na base</td><td id="sPauseStatus">-</td></tr>
                   <tr><td>Registro de pausa</td><td class="mono" id="sPauseDetails" style="font-size:.72rem">-</td></tr>
                 </table>
+                <div class="actions-row" style="margin-top:10px">
+                  <button id="removePauseBtn" class="btn btn-secondary btn-sm btn-pause-remove" disabled>Remover da IA pausada</button>
+                </div>
               </section>
               <section class="card card-json stagger-fade stagger-fade-d2">
                 <div class="card-title">JSON de envio ao n8n</div>
@@ -184,9 +207,11 @@
                   <button id="applyEditedMessageBtn" class="btn btn-ghost btn-sm">Aplicar edição no JSON</button>
                   <button id="resetEditedMessageBtn" class="btn btn-ghost btn-sm">Restaurar original</button>
                 </div>
-                <div class="status-bar" id="mediaStatusBar" style="margin-top:10px">
-                  <span class="status-dot"></span>
-                  <span id="mediaStatusText">Sem mídia detectada nas mensagens selecionadas.</span>
+                <div class="media-status-wrap">
+                  <div class="status-bar media-status-bar" id="mediaStatusBar">
+                    <span class="status-dot"></span>
+                    <span id="mediaStatusText">Sem mídia detectada nas mensagens selecionadas.</span>
+                  </div>
                 </div>
                 <div class="json-block">
                   <pre id="output">{}</pre>
@@ -220,10 +245,17 @@
             <h2>Atividade operacional</h2>
             <span class="section-spacer"></span>
           </div>
-          <div style="display:grid;grid-template-columns:1.1fr 1.9fr;gap:18px">
+          <div class="ops-grid">
             <section class="card card-activity stagger-fade stagger-fade-d4" style="margin:0">
               <div class="card-title">Eventos da sessão</div>
               <div class="activity-feed" id="activityFeed"></div>
+              <div class="card-footer ops-card-footer">
+                <div class="mini-pagination">
+                  <button class="btn btn-ghost btn-sm" id="activityPrevBtn" type="button">Anterior</button>
+                  <span class="page-info" id="activityPageInfo">1 / 1</span>
+                  <button class="btn btn-ghost btn-sm" id="activityNextBtn" type="button">Próximo</button>
+                </div>
+              </div>
             </section>
             <section class="card card-timeline stagger-fade stagger-fade-d5" style="margin:0">
               <div class="card-title">Timeline de execuções n8n</div>
@@ -239,7 +271,12 @@
                 <button class="btn btn-ghost btn-sm" id="clearN8nFiltersBtn">Limpar</button>
               </div>
               <div class="timeline-feed" id="n8nEventsFeed"></div>
-              <div class="card-footer">
+              <div class="card-footer ops-card-footer">
+                <div class="mini-pagination">
+                  <button class="btn btn-ghost btn-sm" id="n8nPrevBtn" type="button">Anterior</button>
+                  <span class="page-info" id="n8nPageInfo">1 / 1</span>
+                  <button class="btn btn-ghost btn-sm" id="n8nNextBtn" type="button">Próximo</button>
+                </div>
                 <button class="btn btn-ghost btn-sm" id="refreshN8nEventsBtn">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                   Recarregar eventos
@@ -247,6 +284,20 @@
               </div>
             </section>
           </div>
+        </div>
+        <div class="section">
+          <div class="section-header">
+            <h2>Controle de fila</h2>
+            <span class="section-spacer"></span>
+            <span class="badge-count" id="queuePendingCount">0</span>
+          </div>
+          <section class="card queue-card">
+            <div class="actions-row queue-actions">
+              <button class="btn btn-ghost btn-sm" id="queueDedupeBtn" type="button">Remover duplicatas</button>
+              <button class="btn btn-ghost btn-sm" id="queueClearBtn" type="button">Limpar pendentes</button>
+            </div>
+            <div class="queue-list" id="queueList"></div>
+          </section>
         </div>
 
         <section class="diagnostic-panel" id="diagnosticPanel">
@@ -283,6 +334,178 @@
               </table>
             </div>
             <div class="pagination" id="historyPagination"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ═══ AJUDA ═══ -->
+      <div class="page" id="page-ajuda">
+        <div class="page-head">
+          <div>
+            <h1>Ajuda</h1>
+            <p style="margin:4px 0 0;font-size:.78rem;color:var(--muted);line-height:1.4">Guia rápido de operação, configuração e suporte do reprocessador</p>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Centro de recursos</h2>
+            <span class="section-spacer"></span>
+          </div>
+          <div class="help-resources-grid">
+            <section class="card help-card stagger-fade stagger-fade-d1">
+              <div class="help-card-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              </div>
+              <div class="help-card-title">Guia rápido</div>
+              <div class="help-card-desc">Passo a passo completo para reprocessar uma conversa do Chatwoot, desde a coleta do link até o monitoramento no n8n.</div>
+              <a class="help-card-link" href="#" data-scroll="faq-section">Ver guia &rarr;</a>
+            </section>
+            <section class="card help-card stagger-fade stagger-fade-d2">
+              <div class="help-card-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </div>
+              <div class="help-card-title">Configuração</div>
+              <div class="help-card-desc">Como cadastrar novas empresas, configurar webhooks e vincular tabelas de pausa do Supabase para cada cliente.</div>
+               <a class="help-card-link" href="#" data-page-nav="configuracoes">Ir para Configurações &rarr;</a>
+            </section>
+          </div>
+        </div>
+
+        <div class="section" id="faq-section">
+          <div class="section-header">
+            <h2>Perguntas frequentes</h2>
+            <span class="section-spacer"></span>
+          </div>
+          <section class="card faq-card stagger-fade stagger-fade-d4" style="padding:0;overflow:hidden">
+            <div class="faq-item">
+              <button class="faq-question" id="faq-question-1" aria-expanded="false">
+                <span class="faq-q-icon">?</span>
+                <span class="faq-q-text">O webhook não está enviando, o que fazer?</span>
+                <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="faq-answer" role="region" aria-hidden="true">
+                <div class="faq-answer-inner">
+                  <p>Verifique se o webhook da empresa está configurado corretamente na página de <strong>Configurações</strong>. Os principais pontos de verificação são:</p>
+                  <ul>
+                    <li>O webhook termina com <code>/webhook</code> e usa HTTPS.</li>
+                    <li>A empresa está com a tabela de pausa correta vinculada (ou nenhuma, se não houver).</li>
+                    <li>O <strong>request_id</strong> aparece na timeline n8n ap&oacute;s o envio — se n&atilde;o aparecer, o backend n&atilde;o recebeu a requisi&ccedil;&atilde;o.</li>
+                    <li>Se aparecer com status de erro, abra o painel de <strong>Diagnóstico</strong> clicando no item na timeline.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div class="faq-item">
+              <button class="faq-question" id="faq-question-2" aria-expanded="false">
+                <span class="faq-q-icon">?</span>
+                <span class="faq-q-text">Como configurar uma nova empresa?</span>
+                <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="faq-answer" role="region" aria-hidden="true">
+                <div class="faq-answer-inner">
+                  <p>No menu <strong>Configurações</strong>, clique em <strong>Nova empresa</strong>. Preencha:</p>
+                  <ul>
+                    <li><strong>Nome</strong> — identificação interna (ex: AKILA, BOTTA).</li>
+                    <li><strong>Webhook</strong> — URL completa do fluxo n8n para esta empresa.</li>
+                    <li><strong>Tabela de pausa</strong> — selecione a tabela do Supabase que contém os registros de pausa de IA.</li>
+                  </ul>
+                  <p>Após preencher, clique em <strong>Salvar empresas.json</strong>. As alterações são aplicadas no backend imediatamente.</p>
+                </div>
+              </div>
+            </div>
+            <div class="faq-item">
+              <button class="faq-question" id="faq-question-3" aria-expanded="false">
+                <span class="faq-q-icon">?</span>
+                <span class="faq-q-text">Como identificar o request_id?</span>
+                <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="faq-answer" role="region" aria-hidden="true">
+                <div class="faq-answer-inner">
+                  <p>O <strong>request_id</strong> é gerado automaticamente pelo backend no momento do envio e aparece:</p>
+                  <ul>
+                    <li>No painel de <strong>Diagnóstico</strong> após clicar em um evento de erro na timeline.</li>
+                    <li>No campo de busca da <strong>Timeline de execuções n8n</strong> — você pode filtrar eventos por ele.</li>
+                    <li>No <strong>Histórico de execuções</strong>, na coluna ID.</li>
+                  </ul>
+                  <p>Use o request_id para rastrear o fluxo completo no n8n e correlacionar com logs do backend.</p>
+                </div>
+              </div>
+            </div>
+            <div class="faq-item">
+              <button class="faq-question" id="faq-question-4" aria-expanded="false">
+                <span class="faq-q-icon">?</span>
+                <span class="faq-q-text">O que significa "IA pausada"?</span>
+                <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="faq-answer" role="region" aria-hidden="true">
+                <div class="faq-answer-inner">
+                  <p>A <strong>pausa de IA</strong> é um registro no Supabase que indica que um contato não deve ser processado automaticamente pela IA do Chatwoot naquele momento. Isso pode ocorrer por:</p>
+                  <ul>
+                    <li>O contato solicitou atendimento humano.</li>
+                    <li>A conversa foi marcada como "sensível" pelo operador.</li>
+                    <li>O fluxo de IA identificou que precisa de revisão manual.</li>
+                  </ul>
+                  <p>Ao reprocessar, o sistema verifica se o contato está na tabela de pausa da empresa. Se estiver, o reprocessamento ainda pode ser executado manualmente, mas exibe um aviso.</p>
+                </div>
+              </div>
+            </div>
+            <div class="faq-item">
+              <button class="faq-question" id="faq-question-5" aria-expanded="false">
+                <span class="faq-q-icon">?</span>
+                <span class="faq-q-text">Como editar a mensagem antes de reprocessar?</span>
+                <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="faq-answer" role="region" aria-hidden="true">
+                <div class="faq-answer-inner">
+                  <p>Após gerar o preview do payload, você pode editar diretamente o campo <strong>content</strong> no editor de JSON antes de clicar em <strong>Reprocessar</strong>.</p>
+                  <p>O JSON exibido no painel "JSON de envio ao n8n" é editável. Apenas o campo <code>content</code> (mensagem) pode ser alterado sem comprometer a estrutura do payload.</p>
+                  <p><strong>Importante:</strong> não altere os campos <code>account_id</code>, <code>conversation_id</code>, <code>contact</code> ou <code>webhook_url</code> — eles são usados para roteamento e rastreamento.</p>
+                </div>
+              </div>
+            </div>
+            <div class="faq-item">
+              <button class="faq-question" id="faq-question-6" aria-expanded="false">
+                <span class="faq-q-icon">?</span>
+                <span class="faq-q-text">O reprocessamento travou, o que aconteceu?</span>
+                <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div class="faq-answer" role="region" aria-hidden="true">
+                <div class="faq-answer-inner">
+                  <p>Se o reprocessamento ficou travado no status "Em andamento" por mais de 30 segundos:</p>
+                  <ul>
+                    <li>Verifique a <strong>Timeline de execuções n8n</strong> para eventos de erro ou timeout.</li>
+                    <li>Abra o <strong>Diagnóstico de falha</strong> clicando no evento com status de erro na timeline.</li>
+                    <li>Confirme se o fluxo n8n da empresa está ativo e respondendo.</li>
+                    <li>Se necessário, cancele e tente novamente — o sistema não duplica registros.</li>
+                  </ul>
+                  <p>Caso o problema persista, entre em contato com o suporte técnico.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>Informações do sistema</h2>
+            <span class="section-spacer"></span>
+          </div>
+          <section class="card help-card stagger-fade stagger-fade-d5">
+            <div class="help-card-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            </div>
+            <div class="help-card-title" style="margin-bottom:8px">Informações do sistema</div>
+            <div class="help-sysinfo">
+              <table class="help-sysinfo-table">
+                <tr><td>Versão</td><td>v2.0</td></tr>
+                <tr><td>Ambiente</td><td><span class="status-pill" style="background:oklch(from var(--success) l c h / .12);color:var(--success)">Produção</span></td></tr>
+                <tr><td>Node</td><td class="mono">18.20.4</td></tr>
+                <tr><td>Base</td><td class="mono">PostgreSQL (Supabase)</td></tr>
+                <tr><td>Automação</td><td class="mono">n8n</td></tr>
+                <tr><td>Chat</td><td class="mono">Chatwoot</td></tr>
+              </table>
+            </div>
           </section>
         </div>
       </div>
@@ -374,6 +597,26 @@
       <button id="confirmModalCancel" class="btn btn-secondary btn-sm" type="button">Cancelar</button>
       <button id="confirmModalOk" class="btn btn-primary btn-sm" type="button">Confirmar</button>
     </div>
+  </div>
+</div>
+
+<div id="pauseRemoveModal" class="confirm-modal" aria-hidden="true">
+  <div class="confirm-modal-backdrop" data-pause-remove-close="true"></div>
+  <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="pauseRemoveModalTitle">
+    <h3 id="pauseRemoveModalTitle">Remover da IA pausada</h3>
+    <p>Deseja realmente remover este contato da tabela de pausa no Supabase? Esta ação exclui o registro e permite novo atendimento pela IA.</p>
+    <div class="confirm-modal-actions">
+      <button id="pauseRemoveModalCancel" class="btn btn-secondary btn-sm" type="button">Cancelar</button>
+      <button id="pauseRemoveModalOk" class="btn btn-primary btn-sm" type="button">Remover</button>
+    </div>
+  </div>
+</div>
+
+<div id="imagePreviewModal" class="media-preview-modal" aria-hidden="true">
+  <div class="media-preview-backdrop" data-media-preview-close="true"></div>
+  <div class="media-preview-dialog" role="dialog" aria-modal="true" aria-label="Preview da imagem">
+    <button id="imagePreviewCloseBtn" class="media-preview-close" type="button" aria-label="Fechar preview">×</button>
+    <img id="imagePreviewImg" src="" alt="Preview da imagem no chat">
   </div>
 </div>
 

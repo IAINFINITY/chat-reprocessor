@@ -10,6 +10,7 @@ import {
   buildReprocessPreview,
   executeReprocessWebhook,
   previewPauseStatus,
+  removePauseStatus,
   ReprocessApiError,
   testWebhookConnection,
 } from "../api/reprocessApi.js";
@@ -669,7 +670,7 @@ function normalizeChatPreviewContent(message) {
     return processed;
   }
 
-  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+  const attachments = extractMessageAttachments(message);
   const contentType = String(message?.content_type || "").toLowerCase();
   const hasAudio = attachments.some((item) =>
     /audio|ogg|mp3|wav|m4a/.test(String(item?.extension || "").toLowerCase()),
@@ -699,6 +700,28 @@ function normalizeChatPreviewContent(message) {
   return "[mensagem sem texto]";
 }
 
+function extractMessageAttachments(message) {
+  const fromList = Array.isArray(message?.attachments) ? message.attachments : [];
+  if (fromList.length > 0) {
+    return fromList;
+  }
+
+  const single = message?.attachment;
+  if (single && typeof single === "object") {
+    const hasData =
+      single.id ||
+      single.data_url ||
+      single.url ||
+      single.file_type ||
+      single.extension;
+    if (hasData) {
+      return [single];
+    }
+  }
+
+  return [];
+}
+
 function mapMessageDirection(message) {
   if (Boolean(message?.private)) {
     return "private";
@@ -722,7 +745,93 @@ function mapMessageDirection(message) {
   return "unknown";
 }
 
-function normalizeConversationMessagesForPreview(messagesResponse) {
+function detectAttachmentKind(attachment) {
+  const fileType = String(attachment?.file_type || "").toLowerCase();
+  const extension = String(attachment?.extension || "").toLowerCase();
+  const joined = `${fileType} ${extension}`;
+
+  if (/audio|ogg|mp3|wav|m4a|aac|opus/.test(joined)) {
+    return "audio";
+  }
+
+  if (/image|jpg|jpeg|png|webp|gif|bmp|svg/.test(joined)) {
+    return "image";
+  }
+
+  return "file";
+}
+
+function resolveAttachmentSourceUrl(attachment, baseUrl) {
+  const candidates = [
+    attachment?.data_url,
+    attachment?.url,
+    attachment?.download_url,
+    attachment?.file_url,
+    attachment?.thumb_url,
+  ];
+
+  const raw = String(candidates.find((value) => String(value || "").trim()) || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+
+  if (raw.startsWith("//")) {
+    return `https:${raw}`;
+  }
+
+  const normalizedBase = String(baseUrl || "").replace(/\/+$/, "");
+  if (!normalizedBase) {
+    return raw;
+  }
+
+  if (raw.startsWith("/")) {
+    return `${normalizedBase}${raw}`;
+  }
+
+  return `${normalizedBase}/${raw}`;
+}
+
+function guessAttachmentMimeType(attachment) {
+  const fileType = String(attachment?.file_type || "").toLowerCase();
+  if (fileType) {
+    return fileType;
+  }
+
+  const ext = String(attachment?.extension || "").toLowerCase().replace(/^\./, "");
+  const map = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+    svg: "image/svg+xml",
+    mp3: "audio/mpeg",
+    ogg: "audio/ogg",
+    wav: "audio/wav",
+    m4a: "audio/mp4",
+    aac: "audio/aac",
+    opus: "audio/ogg",
+    pdf: "application/pdf",
+  };
+
+  return map[ext] || "application/octet-stream";
+}
+
+function buildAttachmentProxyUrl({ conversationUrl, messageId, attachmentIndex }) {
+  const params = new URLSearchParams();
+  params.set("conversationUrl", String(conversationUrl || ""));
+  params.set("messageId", String(messageId || ""));
+  params.set("attachmentIndex", String(attachmentIndex || 0));
+  return `/api/reprocess/chatwoot/media?${params.toString()}`;
+}
+
+function normalizeConversationMessagesForPreview(messagesResponse, options = {}) {
+  const baseUrl = String(options.baseUrl || "").trim();
+  const conversationUrl = String(options.conversationUrl || "").trim();
   const payload = Array.isArray(messagesResponse?.payload) ? messagesResponse.payload : [];
   const sorted = [...payload].sort((left, right) => {
     const byCreatedAt = Number(left?.created_at || 0) - Number(right?.created_at || 0);
@@ -735,8 +844,33 @@ function normalizeConversationMessagesForPreview(messagesResponse) {
 
   return sorted.map((message) => {
     const createdAtSec = Number(message?.created_at || 0);
+    const messageId = Number(message?.id || 0) || null;
+    const rawAttachments = extractMessageAttachments(message);
+    const attachments = rawAttachments.map((attachment, index) => {
+      const sourceUrl = resolveAttachmentSourceUrl(attachment, baseUrl);
+      const mediaKind = detectAttachmentKind(attachment);
+      return {
+        id: Number(attachment?.id || 0) || null,
+        kind: mediaKind,
+        file_type: String(attachment?.file_type || ""),
+        extension: String(attachment?.extension || ""),
+        file_size: Number(attachment?.file_size || 0) || 0,
+        width: Number(attachment?.width || 0) || null,
+        height: Number(attachment?.height || 0) || null,
+        source_url: sourceUrl || null,
+        proxy_url:
+          conversationUrl && messageId != null
+            ? buildAttachmentProxyUrl({
+                conversationUrl,
+                messageId,
+                attachmentIndex: index,
+              })
+            : null,
+      };
+    });
+
     return {
-      id: Number(message?.id || 0) || null,
+      id: messageId,
       conversation_id: Number(message?.conversation_id || 0) || null,
       account_id: Number(message?.account_id || 0) || null,
       message_type: Number(message?.message_type),
@@ -745,7 +879,8 @@ function normalizeConversationMessagesForPreview(messagesResponse) {
       sender_name: String(message?.sender?.name || message?.sender?.available_name || ""),
       private: Boolean(message?.private),
       direction: mapMessageDirection(message),
-      attachments_count: Array.isArray(message?.attachments) ? message.attachments.length : 0,
+      attachments_count: attachments.length,
+      attachments,
       content: normalizeChatPreviewContent(message),
       created_at: createdAtSec || null,
       created_at_iso: createdAtSec
@@ -890,15 +1025,12 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/") {
-    try {
-      const content = readFileSync(indexHtmlPath, "utf8");
-      return html(res, 200, content);
-    } catch {
-      return json(res, 500, {
-        error: "index_unavailable",
-        message: "Nao foi possivel carregar public/pages/index.html",
-      });
-    }
+    res.writeHead(302, {
+      Location: "/reprocessador",
+      "Cache-Control": "no-store",
+    });
+    res.end();
+    return;
   }
 
   if (req.method === "GET" && pathname === "/reprocessador") {
@@ -908,6 +1040,18 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 500, {
         error: "reprocessador_unavailable",
+        message: "Nao foi possivel carregar public/pages/reprocessador.html",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/ajuda") {
+    try {
+      const content = readFileSync(reprocessadorHtmlPath, "utf8");
+      return html(res, 200, content);
+    } catch {
+      return json(res, 500, {
+        error: "ajuda_unavailable",
         message: "Nao foi possivel carregar public/pages/reprocessador.html",
       });
     }
@@ -1010,7 +1154,10 @@ const server = createServer(async (req, res) => {
         identity.accountId,
         identity.conversationId,
       );
-      const normalized = normalizeConversationMessagesForPreview(messagesResponse);
+      const normalized = normalizeConversationMessagesForPreview(messagesResponse, {
+        baseUrl: identity.baseUrl,
+        conversationUrl,
+      });
       const sliced = normalized.slice(Math.max(0, normalized.length - limit));
 
       return json(res, 200, {
@@ -1025,6 +1172,104 @@ const server = createServer(async (req, res) => {
         success: false,
         error: "chatwoot_messages_fetch_failed",
         message: error?.message || "Falha ao consultar mensagens no Chatwoot.",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/chatwoot/media") {
+    try {
+      const conversationUrl = String(requestUrl.searchParams.get("conversationUrl") || "").trim();
+      const messageId = Number(requestUrl.searchParams.get("messageId") || 0);
+      const attachmentIndex = Number(requestUrl.searchParams.get("attachmentIndex") || 0);
+
+      if (!conversationUrl || !Number.isInteger(messageId) || messageId <= 0) {
+        return json(res, 400, {
+          success: false,
+          error: "invalid_media_request",
+          message: "Informe conversationUrl, messageId e attachmentIndex validos.",
+        });
+      }
+
+      const identity = resolveConversationIdentity(
+        { chat_url: conversationUrl },
+        config.chatwootBaseUrl,
+      );
+      const chatwootClient = createChatwootClient({
+        baseUrl: identity.baseUrl,
+        apiAccessToken: config.chatwootApiToken,
+      });
+      const messagesResponse = await chatwootClient.getConversationMessages(
+        identity.accountId,
+        identity.conversationId,
+      );
+      const payload = Array.isArray(messagesResponse?.payload) ? messagesResponse.payload : [];
+      const targetMessage = payload.find((message) => Number(message?.id || 0) === messageId);
+
+      if (!targetMessage) {
+        return json(res, 404, {
+          success: false,
+          error: "media_message_not_found",
+          message: "Mensagem de mídia não encontrada na conversa.",
+        });
+      }
+
+      const attachments = extractMessageAttachments(targetMessage);
+      const targetAttachment = attachments[attachmentIndex];
+      if (!targetAttachment) {
+        return json(res, 404, {
+          success: false,
+          error: "media_attachment_not_found",
+          message: "Anexo não encontrado para esta mensagem.",
+        });
+      }
+
+      const sourceUrl = resolveAttachmentSourceUrl(targetAttachment, identity.baseUrl);
+      if (!sourceUrl) {
+        return json(res, 404, {
+          success: false,
+          error: "media_url_unavailable",
+          message: "URL de mídia indisponível no payload do Chatwoot.",
+        });
+      }
+
+      const upstream = await fetch(sourceUrl, {
+        method: "GET",
+        headers: {
+          api_access_token: config.chatwootApiToken,
+        },
+      });
+
+      if (!upstream.ok) {
+        const errorText = await upstream.text();
+        return json(res, 502, {
+          success: false,
+          error: "media_fetch_failed",
+          message: `Falha ao baixar mídia do Chatwoot (${upstream.status}).`,
+          details: {
+            status_code: upstream.status,
+            response_excerpt: String(errorText || "").slice(0, 240),
+          },
+        });
+      }
+
+      const mimeType =
+        String(upstream.headers.get("content-type") || "").trim() ||
+        guessAttachmentMimeType(targetAttachment);
+      const contentLength = String(upstream.headers.get("content-length") || "").trim();
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+
+      res.writeHead(200, {
+        "Content-Type": mimeType,
+        "Content-Length": contentLength || String(buffer.length),
+        "Cache-Control": "no-store",
+      });
+      res.end(buffer);
+      return;
+    } catch (error) {
+      return json(res, 502, {
+        success: false,
+        error: "chatwoot_media_proxy_failed",
+        message: error?.message || "Falha ao carregar mídia via proxy do Chatwoot.",
       });
     }
   }
@@ -1366,6 +1611,17 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  if (req.method === "POST" && pathname === "/api/reprocess/pause-remove") {
+    try {
+      const input = await readJsonBody(req);
+      const result = await removePauseStatus({ input, config });
+      return json(res, 200, result);
+    } catch (error) {
+      const formatted = toApiErrorResponse(error);
+      return json(res, formatted.statusCode, formatted.body);
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/reprocess/n8n/execution/latest") {
     const client = requestUrl.searchParams.get("client") || "";
     const requestId = requestUrl.searchParams.get("request_id") || "";
@@ -1461,8 +1717,8 @@ const server = createServer(async (req, res) => {
 
   return json(res, 404, {
     error: "not_found",
-    message:
-      "Use GET /, GET /login, GET /reprocessador, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/temp/session, POST /api/auth/temp/login, POST /api/auth/temp/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/chatwoot/messages, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
+      message:
+      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/temp/session, POST /api/auth/temp/login, POST /api/auth/temp/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
 });
 

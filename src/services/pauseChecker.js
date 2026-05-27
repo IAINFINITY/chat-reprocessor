@@ -526,6 +526,46 @@ async function fetchPauseRowsSample({
   }
 }
 
+async function deletePauseRows({
+  supabaseClient,
+  schema,
+  table,
+  phoneColumn,
+  phoneValue,
+}) {
+  try {
+    const { data, error, status } = await supabaseClient
+      .schema(schema)
+      .from(table)
+      .delete()
+      .eq(phoneColumn, phoneValue)
+      .select("*");
+
+    if (error) {
+      return {
+        ok: false,
+        status: Number(status || 500),
+        rows: [],
+        rawText: error.message || "erro supabase",
+      };
+    }
+
+    return {
+      ok: true,
+      status: Number(status || 200),
+      rows: Array.isArray(data) ? data : [],
+      rawText: "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 500,
+      rows: [],
+      rawText: error?.message || "erro supabase",
+    };
+  }
+}
+
 function findPauseRowByNormalizedPhone({
   rows,
   phoneColumns,
@@ -835,6 +875,176 @@ export async function inspectPauseConfigForClient({
       : tableInspection?.message || "Falha ao inspecionar colunas da tabela.",
     fallback_error: tableInspection?.fallback_error || null,
     fallback_message: tableInspection?.fallback_message || null,
+  };
+}
+
+export async function removeClientPauseEntry({
+  clientConfig,
+  phone,
+  config,
+}) {
+  const pauseTableResolution = await resolvePauseTableName(clientConfig, config);
+  const pauseTable = String(pauseTableResolution?.table || "").trim();
+  const pauseSchema = String(clientConfig?.pauseSchema || "public").trim();
+
+  if (!pauseTable) {
+    return {
+      success: false,
+      removed: false,
+      reason: pauseTableResolution?.reason || "pause_table_not_configured",
+      table: null,
+      schema: pauseSchema,
+      removed_count: 0,
+    };
+  }
+
+  const supabaseClient = createSupabaseAdminClient(config);
+  if (!supabaseClient) {
+    return {
+      success: false,
+      removed: false,
+      reason: "supabase_not_configured",
+      table: pauseTable,
+      schema: pauseSchema,
+      removed_count: 0,
+    };
+  }
+
+  const pauseLookupColumns = buildLookupColumnCandidates(clientConfig);
+  const explicitFlagColumn = String(clientConfig?.pauseFlagColumn || "").trim();
+  const probeCandidates = [
+    ...pauseLookupColumns,
+    explicitFlagColumn,
+    ...DEFAULT_FLAG_PROBE_COLUMNS,
+  ];
+  const tableInspection = await inspectPauseTableColumns({
+    config,
+    table: pauseTable,
+    schema: pauseSchema,
+    probeCandidates,
+  });
+  const resolvedLookupColumns = tableInspection?.ok
+    ? resolveExistingLookupColumns(pauseLookupColumns, tableInspection.columns)
+    : [];
+  const phoneColumns = resolvedLookupColumns.length > 0 ? resolvedLookupColumns : pauseLookupColumns;
+  const phoneCandidates = buildPhoneCandidates(phone);
+
+  if (phoneCandidates.length === 0) {
+    return {
+      success: false,
+      removed: false,
+      reason: "phone_not_available",
+      table: pauseTable,
+      schema: pauseSchema,
+      removed_count: 0,
+      lookup_columns_tried: phoneColumns,
+    };
+  }
+
+  const pauseStatus = await checkClientPauseStatus({
+    clientConfig,
+    phone,
+    config,
+  });
+
+  const triedPairs = new Set();
+  const deleteTargets = [];
+  const pushTarget = (column, value) => {
+    const safeColumn = String(column || "").trim();
+    const safeValue = String(value || "").trim();
+    if (!safeColumn || !safeValue) {
+      return;
+    }
+    const key = `${safeColumn}::${safeValue}`;
+    if (triedPairs.has(key)) {
+      return;
+    }
+    triedPairs.add(key);
+    deleteTargets.push({ phoneColumn: safeColumn, phoneValue: safeValue });
+  };
+
+  if (pauseStatus?.paused && pauseStatus?.phone_column) {
+    pushTarget(pauseStatus.phone_column, pauseStatus.matched_phone || phone);
+    for (const candidate of phoneCandidates) {
+      pushTarget(pauseStatus.phone_column, candidate);
+    }
+  } else {
+    for (const phoneColumn of phoneColumns) {
+      for (const candidate of phoneCandidates) {
+        pushTarget(phoneColumn, candidate);
+      }
+    }
+  }
+
+  let removedCount = 0;
+  let removedByColumn = null;
+  let removedByValue = null;
+  let lastError = null;
+
+  for (const target of deleteTargets) {
+    const result = await deletePauseRows({
+      supabaseClient,
+      schema: pauseSchema,
+      table: pauseTable,
+      phoneColumn: target.phoneColumn,
+      phoneValue: target.phoneValue,
+    });
+
+    if (!result.ok) {
+      lastError = result;
+      continue;
+    }
+
+    const count = Array.isArray(result.rows) ? result.rows.length : 0;
+    if (count > 0) {
+      removedCount += count;
+      removedByColumn = target.phoneColumn;
+      removedByValue = target.phoneValue;
+      if (pauseStatus?.paused) {
+        break;
+      }
+    }
+  }
+
+  if (removedCount > 0) {
+    return {
+      success: true,
+      removed: true,
+      reason: "pause_entry_removed",
+      table: pauseTable,
+      schema: pauseSchema,
+      removed_count: removedCount,
+      phone_column: removedByColumn,
+      matched_phone: removedByValue,
+      pause_table_source: pauseTableResolution?.source || "env",
+      lookup_columns_tried: phoneColumns,
+    };
+  }
+
+  if (lastError) {
+    return {
+      success: false,
+      removed: false,
+      reason: "pause_remove_failed",
+      table: pauseTable,
+      schema: pauseSchema,
+      removed_count: 0,
+      status_code: lastError.status || null,
+      response_excerpt: String(lastError.rawText || "").slice(0, 500),
+      pause_table_source: pauseTableResolution?.source || "env",
+      lookup_columns_tried: phoneColumns,
+    };
+  }
+
+  return {
+    success: true,
+    removed: false,
+    reason: "pause_entry_not_found",
+    table: pauseTable,
+    schema: pauseSchema,
+    removed_count: 0,
+    pause_table_source: pauseTableResolution?.source || "env",
+    lookup_columns_tried: phoneColumns,
   };
 }
 

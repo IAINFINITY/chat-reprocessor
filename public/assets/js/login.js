@@ -1,7 +1,7 @@
 ﻿(() => {
 "use strict";
 
-var STORAGE_THEME = "cw-preview-theme";
+var STORAGE_THEME = "cw-theme-v3";
 
 var loginToggle = document.getElementById("loginThemeToggle");
 var loginToggleIcon = document.getElementById("loginThemeIcon");

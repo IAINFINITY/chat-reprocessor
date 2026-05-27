@@ -10,7 +10,7 @@ import {
 } from "../domain/reprocessClients.js";
 import { getWebhookHeaderTemplate } from "../domain/webhookResolver.js";
 import { buildMergedUserTextWithMeta } from "../services/messageEnricher.js";
-import { checkClientPauseStatus } from "../services/pauseChecker.js";
+import { checkClientPauseStatus, removeClientPauseEntry } from "../services/pauseChecker.js";
 
 export class ReprocessApiError extends Error {
   constructor(code, message, statusCode = 400, details = null) {
@@ -735,7 +735,7 @@ export async function executeReprocessWebhook({ input, config }) {
 
         return {
           success: true,
-          message: "Reprocessamento enviado com sucesso.",
+          message: "Payload enviado ao webhook. Aguardando conclusao final do fluxo.",
           request_id: requestId,
           idempotency_key: idempotencyKey,
           client: clientKey,
@@ -850,6 +850,59 @@ export async function previewPauseStatus({ input, config }) {
     contact_id: extractCoreContactId(webhookBody) || null,
     phone: phoneForPauseCheck || null,
     pause_status: pauseStatus,
+  };
+}
+
+export async function removePauseStatus({ input, config }) {
+  const clientKey = getClientInput(input);
+  const payload = input?.payload;
+
+  if (!clientKey) {
+    fail("client_required", "Informe o cliente para remover a pausa.", 400);
+  }
+
+  if (!payload || typeof payload !== "object") {
+    fail("invalid_payload", "Payload invalido para remover pausa.", 400);
+  }
+
+  const clientConfig = getReprocessClient(clientKey);
+  if (!clientConfig || !clientConfig.webhookUrl) {
+    fail(
+      "webhook_not_configured",
+      `Webhook nao configurado para o cliente '${clientKey}'.`,
+      400,
+    );
+  }
+
+  const normalizedPayload = Array.isArray(payload) ? payload[0] : payload;
+  const webhookBody = normalizedPayload?.body || payload;
+  const phoneForPauseCheck = extractPhoneForPauseCheck(webhookBody);
+
+  const result = await removeClientPauseEntry({
+    clientConfig,
+    phone: phoneForPauseCheck,
+    config,
+  });
+
+  if (result.success === false && result.reason === "pause_remove_failed") {
+    fail(
+      "pause_remove_failed",
+      "Falha ao remover contato da tabela de pausa no Supabase.",
+      502,
+      result,
+    );
+  }
+
+  return {
+    success: true,
+    client: clientKey,
+    conversation_id: extractCoreConversationId(webhookBody) || null,
+    contact_id: extractCoreContactId(webhookBody) || null,
+    phone: phoneForPauseCheck || null,
+    pause_remove: result,
+    message: result.removed
+      ? "Contato removido da tabela de pausa com sucesso."
+      : "Contato nao encontrado na tabela de pausa.",
   };
 }
 

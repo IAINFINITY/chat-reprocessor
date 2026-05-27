@@ -18,6 +18,10 @@ var COMPANY_LOGO_STYLE = {
 
 var HISTORY_STORAGE_KEY = "ia_reprocess_history_v1";
 var ACTIVITY_STORAGE_KEY = "ia_reprocess_activity_v1";
+var FORCE_COMPLETE_RUNNING_AFTER_MS = 90000;
+var ACTIVITY_MAX_ITEMS = 80;
+var ACTIVITY_PAGE_SIZE = 6;
+var N8N_TIMELINE_PAGE_SIZE = 6;
 
 var state = {
   clients: [],
@@ -32,7 +36,8 @@ var state = {
   history: [],
   activity: [],
   historyPage: 1,
-  activityExpanded: false,
+  activityPage: 1,
+  n8nPage: 1,
   n8nEvents: [],
   localN8nEvents: [],
   n8nEventsTimer: null,
@@ -55,6 +60,9 @@ var state = {
   monitorRunningTicks: 0,
   activeRunRequestId: "",
   activeRunStartedAt: 0,
+  activeRunClientKey: "",
+  previewProgressTimer: null,
+  previewProgressValue: 0,
 };
 
 var el = {};
@@ -66,6 +74,12 @@ var el = {};
   "pipelineSteps",
   "previewBtn",
   "executeBtn",
+  "previewProgressWrap",
+  "previewProgressBar",
+  "previewProgressText",
+  "previewProgressValue",
+  "pauseWarningBox",
+  "pauseWarningText",
   "statusBar",
   "statusText",
   "output",
@@ -80,6 +94,7 @@ var el = {};
   "sWebhook",
   "sPauseStatus",
   "sPauseDetails",
+  "removePauseBtn",
   "companyLogoArea",
   "companyLogoImg",
   "resultsSection",
@@ -97,7 +112,13 @@ var el = {};
   "n8nLookupBtn",
   "clearDiagnosticBtn",
   "activityFeed",
+  "activityPrevBtn",
+  "activityNextBtn",
+  "activityPageInfo",
   "n8nEventsFeed",
+  "n8nPrevBtn",
+  "n8nNextBtn",
+  "n8nPageInfo",
   "refreshN8nEventsBtn",
   "n8nTypeFilter",
   "n8nRequestFilter",
@@ -110,6 +131,10 @@ var el = {};
   "historyBody",
   "historyPagination",
   "refreshHistory",
+  "queuePendingCount",
+  "queueDedupeBtn",
+  "queueClearBtn",
+  "queueList",
   "summaryBadge",
   "editedMessage",
   "applyEditedMessageBtn",
@@ -121,9 +146,20 @@ var el = {};
   "statPending",
   "statClients",
   "toastNotice",
+  "imagePreviewModal",
+  "imagePreviewImg",
+  "imagePreviewCloseBtn",
 ].forEach(function (id) {
   el[id] = document.getElementById(id);
 });
+
+var pauseRemoveModal = document.getElementById("pauseRemoveModal");
+var pauseRemoveModalOk = document.getElementById("pauseRemoveModalOk");
+var pauseRemoveModalCancel = document.getElementById("pauseRemoveModalCancel");
+var pauseRemoveModalResolver = null;
+var imagePreviewModal = document.getElementById("imagePreviewModal");
+var imagePreviewImg = document.getElementById("imagePreviewImg");
+var imagePreviewCloseBtn = document.getElementById("imagePreviewCloseBtn");
 
 function hasEl(name) {
   return Boolean(el[name]);
@@ -137,6 +173,61 @@ function onEl(name, eventName, handler) {
   return true;
 }
 
+function closePauseRemoveModal(result) {
+  if (pauseRemoveModal) {
+    pauseRemoveModal.classList.remove("is-open");
+    pauseRemoveModal.setAttribute("aria-hidden", "true");
+  }
+  if (typeof pauseRemoveModalResolver === "function") {
+    var resolve = pauseRemoveModalResolver;
+    pauseRemoveModalResolver = null;
+    resolve(Boolean(result));
+  }
+}
+
+function openPauseRemoveModal() {
+  if (!pauseRemoveModal) {
+    if (typeof window.openConfirmModal === "function") {
+      return window.openConfirmModal(
+        "Deseja remover este contato da tabela de IA pausada? Esta ação exclui o registro no Supabase.",
+      );
+    }
+    return Promise.resolve(window.confirm("Deseja remover este contato da tabela de IA pausada?"));
+  }
+
+  if (typeof pauseRemoveModalResolver === "function") {
+    pauseRemoveModalResolver(false);
+    pauseRemoveModalResolver = null;
+  }
+
+  pauseRemoveModal.classList.add("is-open");
+  pauseRemoveModal.setAttribute("aria-hidden", "false");
+  return new Promise(function (resolve) {
+    pauseRemoveModalResolver = resolve;
+  });
+}
+
+function openImagePreviewModal(url) {
+  var src = safeText(url, "");
+  if (!src || !imagePreviewModal || !imagePreviewImg) {
+    return;
+  }
+  imagePreviewImg.src = src;
+  imagePreviewModal.classList.add("is-open");
+  imagePreviewModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+}
+
+function closeImagePreviewModal() {
+  if (!imagePreviewModal || !imagePreviewImg) {
+    return;
+  }
+  imagePreviewModal.classList.remove("is-open");
+  imagePreviewModal.setAttribute("aria-hidden", "true");
+  imagePreviewImg.src = "";
+  document.body.style.overflow = "";
+}
+
 function wait(ms) {
   return new Promise(function (resolve) {
     setTimeout(resolve, ms);
@@ -146,6 +237,15 @@ function wait(ms) {
 function safeText(value, fallback) {
   var text = String(value == null ? "" : value).trim();
   return text || fallback;
+}
+
+function truncateText(value, maxLen) {
+  var text = String(value == null ? "" : value).trim();
+  var limit = Number(maxLen || 0);
+  if (!limit || text.length <= limit) {
+    return text;
+  }
+  return text.slice(0, Math.max(0, limit - 1)) + "…";
 }
 
 function readStorageJson(key, fallback) {
@@ -291,7 +391,8 @@ function renderMediaStatus(mediaMeta) {
   var meta = mediaMeta && typeof mediaMeta === "object" ? mediaMeta : null;
   if (!meta) {
     el.mediaStatusText.textContent = "Sem mídia detectada nas mensagens selecionadas.";
-    el.mediaStatusBar.classList.remove("is-visible", "is-error");
+    el.mediaStatusBar.classList.add("is-visible");
+    el.mediaStatusBar.classList.remove("is-error");
     return;
   }
 
@@ -335,11 +436,128 @@ function renderMediaStatus(mediaMeta) {
   el.mediaStatusBar.classList.add("is-visible");
 }
 
+function selectInboundMessagesForPreview(messages, messageCount) {
+  var rows = Array.isArray(messages) ? messages : [];
+  var inbound = rows.filter(function (message) {
+    return safeText(message && message.direction, "").toLowerCase() === "inbound";
+  });
+  var count = Math.max(1, Math.min(Number(messageCount || 1), 20));
+  if (inbound.length <= count) {
+    return inbound;
+  }
+  return inbound.slice(-count);
+}
+
+function detectMediaFromChatMessages(messages, messageCount) {
+  var selected = selectInboundMessagesForPreview(messages, messageCount);
+  var counts = {
+    audio: 0,
+    image: 0,
+    other: 0,
+    selected: selected.length,
+  };
+
+  selected.forEach(function (message) {
+    var contentType = safeText(message && message.content_type, "").toLowerCase();
+    var content = safeText(message && message.content, "").toLowerCase();
+    var attachmentsCount = Number(message && message.attachments_count || 0);
+    var attachments = Array.isArray(message && message.attachments) ? message.attachments : [];
+    var attachmentKinds = attachments.map(function (item) {
+      return safeText(item && item.kind, "").toLowerCase();
+    });
+    var hasAttachmentAudio = attachmentKinds.indexOf("audio") >= 0;
+    var hasAttachmentImage = attachmentKinds.indexOf("image") >= 0;
+
+    var isAudio =
+      contentType === "audio" ||
+      hasAttachmentAudio ||
+      content.indexOf("[audio]") >= 0 ||
+      content.indexOf("audio") >= 0;
+    var isImage =
+      contentType === "image" ||
+      hasAttachmentImage ||
+      content.indexOf("[imagem]") >= 0 ||
+      content.indexOf("[image]") >= 0 ||
+      content.indexOf("imagem") >= 0;
+
+    if (isAudio) {
+      counts.audio += 1;
+      return;
+    }
+    if (isImage) {
+      counts.image += 1;
+      return;
+    }
+    if (attachmentsCount > 0 || (contentType && contentType !== "text")) {
+      counts.other += 1;
+    }
+  });
+
+  counts.hasMedia = counts.audio + counts.image + counts.other > 0;
+  return counts;
+}
+
+function buildPrePreviewMediaNotice(mediaSignal) {
+  var signal = mediaSignal && typeof mediaSignal === "object" ? mediaSignal : null;
+  if (!signal) {
+    return "";
+  }
+
+  var parts = [];
+  if (Number(signal.audio || 0) > 0) {
+    parts.push(String(signal.audio) + " áudio(s)");
+  }
+  if (Number(signal.image || 0) > 0) {
+    parts.push(String(signal.image) + " imagem(ns)");
+  }
+  if (Number(signal.other || 0) > 0) {
+    parts.push(String(signal.other) + " anexo(s)");
+  }
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  return (
+    "Pré-análise: mídia detectada em " +
+    String(signal.selected || 0) +
+    " mensagem(ns) selecionada(s): " +
+    parts.join(", ") +
+    ". Ao gerar o preview, a IA irá processar isso."
+  );
+}
+
 function syncEditedMessageInputFromPayload(payload) {
   if (!hasEl("editedMessage")) {
     return;
   }
   el.editedMessage.value = extractPreviewMainMessage(payload);
+}
+
+function normalizeBackendErrorMessage(message) {
+  var text = safeText(message, "");
+  var normalized = text.toLowerCase();
+  if (!text) {
+    return "Erro desconhecido.";
+  }
+
+  var hasTokenIssue =
+    normalized.includes("token") ||
+    normalized.includes("sem token") ||
+    normalized.includes("missing token") ||
+    normalized.includes("missing api key") ||
+    normalized.includes("api key") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("forbidden") ||
+    normalized.includes("invalid_api_key") ||
+    normalized.includes("api_access_token") ||
+    normalized.includes("401");
+
+  if (hasTokenIssue) {
+    return "Falha de autenticação: sem token válido em um dos serviços (Chatwoot/OpenAI/n8n/Supabase).";
+  }
+
+  return text;
 }
 
 function stripJsonFromText(value) {
@@ -507,6 +725,76 @@ function setChatAnimationSuppressed(enabled) {
   }
 }
 
+function stopPreviewProgressTimer() {
+  if (state.previewProgressTimer) {
+    clearInterval(state.previewProgressTimer);
+    state.previewProgressTimer = null;
+  }
+}
+
+function setPreviewProgress(percent, message, options) {
+  if (!hasEl("previewProgressWrap") || !hasEl("previewProgressBar") || !hasEl("previewProgressText") || !hasEl("previewProgressValue")) {
+    return;
+  }
+
+  var opts = options || {};
+  var safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+  state.previewProgressValue = safePercent;
+
+  el.previewProgressWrap.classList.add("is-visible");
+  el.previewProgressWrap.classList.toggle("is-error", opts.isError === true);
+  el.previewProgressBar.style.width = safePercent + "%";
+  el.previewProgressText.textContent = safeText(message, "Gerando preview...");
+  el.previewProgressValue.textContent = Math.round(safePercent) + "%";
+}
+
+function startPreviewProgressFlow() {
+  stopPreviewProgressTimer();
+  setPreviewProgress(8, "Validando URL e preparando consulta...");
+  state.previewProgressTimer = setInterval(function () {
+    if (state.previewProgressValue >= 92) {
+      return;
+    }
+    var step = state.previewProgressValue < 40 ? 5 : state.previewProgressValue < 70 ? 3 : 1.2;
+    setPreviewProgress(state.previewProgressValue + step, "Processando mensagens para o preview...");
+  }, 250);
+}
+
+function finishPreviewProgressFlow(isError, message) {
+  stopPreviewProgressTimer();
+  var text = safeText(
+    message,
+    isError ? "Falha ao gerar preview." : "Preview gerado com sucesso.",
+  );
+  setPreviewProgress(100, text, { isError: isError === true });
+
+  setTimeout(function () {
+    if (!hasEl("previewProgressWrap")) {
+      return;
+    }
+    el.previewProgressWrap.classList.remove("is-visible", "is-error");
+  }, 1000);
+}
+
+function renderPauseWarning(pauseStatus) {
+  if (!hasEl("pauseWarningBox") || !hasEl("pauseWarningText")) {
+    return;
+  }
+
+  var paused = Boolean(pauseStatus && pauseStatus.paused === true);
+  if (!paused) {
+    el.pauseWarningBox.classList.remove("is-visible");
+    el.pauseWarningText.textContent = "Remova o contato da IA pausada para liberar o reprocessamento.";
+    return;
+  }
+
+  var table = safeText(pauseStatus && pauseStatus.table, "-");
+  var matched = safeText(pauseStatus && pauseStatus.matched_phone, "-");
+  el.pauseWarningText.textContent =
+    "Contato localizado na tabela '" + table + "' (match: " + matched + "). Remova da IA pausada antes de reprocessar.";
+  el.pauseWarningBox.classList.add("is-visible");
+}
+
 function formatChatTime(value) {
   var date = new Date(value || "");
   if (Number.isNaN(date.getTime())) {
@@ -550,6 +838,77 @@ function getStatusDotClass(message) {
   return "sent";
 }
 
+function isSystemNotificationMessage(message) {
+  var direction = safeText(message && message.direction, "").toLowerCase();
+  if (direction === "system") {
+    return true;
+  }
+
+  var senderName = safeText(message && message.sender_name, "").toLowerCase();
+  var content = safeText(message && message.content, "").toLowerCase();
+  var attachmentsCount = Number(message && message.attachments_count || 0);
+
+  if (attachmentsCount > 0) {
+    return false;
+  }
+
+  var looksLikeOperationalNotice =
+    /conversa foi|suporte adicionou|foi marcada como|foi transferida|foi atribu[ií]da|alterou|removeu/.test(content);
+
+  if (looksLikeOperationalNotice && (senderName === "contato" || senderName === "system" || senderName === "sistema")) {
+    return true;
+  }
+
+  return false;
+}
+
+function renderChatAttachmentsHtml(message) {
+  var attachments = Array.isArray(message && message.attachments) ? message.attachments : [];
+  if (attachments.length === 0) {
+    return "";
+  }
+
+  var mediaHtml = attachments.map(function (item, index) {
+    var kind = safeText(item && item.kind, "file").toLowerCase();
+    var proxyUrl = safeText(item && item.proxy_url, "");
+    var sourceUrl = safeText(item && item.source_url, "");
+    var href = proxyUrl || sourceUrl;
+    var label = "Anexo " + String(index + 1);
+
+    if (!href) {
+      return '<div class="chat-attachment chat-attachment-file"><span>' + label + ': indisponível</span></div>';
+    }
+
+    if (kind === "audio") {
+      return (
+        '<div class="chat-attachment chat-attachment-audio">' +
+          '<div class="chat-attachment-audio-head">' +
+            '<span class="chat-attachment-audio-badge">Áudio</span>' +
+            '<a class="chat-attachment-audio-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' +
+          "</div>" +
+          '<audio class="chat-audio-player" controls preload="none" controlsList="nodownload noplaybackrate" src="' + escapeHtml(href) + '"></audio>' +
+        "</div>"
+      );
+    }
+
+    if (kind === "image") {
+      return (
+        '<button class="chat-attachment chat-attachment-image" type="button" data-image-preview-url="' + escapeHtml(href) + '">' +
+          '<img src="' + escapeHtml(href) + '" loading="lazy" alt="Imagem enviada no chat">' +
+        "</button>"
+      );
+    }
+
+    return (
+      '<a class="chat-attachment chat-attachment-file" href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' +
+        "Abrir anexo" +
+      "</a>"
+    );
+  }).join("");
+
+  return '<div class="chat-attachments">' + mediaHtml + "</div>";
+}
+
 function renderChatMessages(options) {
   var opts = options || {};
   var suppressAnimations = opts.suppressAnimations === true;
@@ -568,6 +927,18 @@ function renderChatMessages(options) {
     el.chatPreviewList.appendChild(empty);
   } else {
     state.chatMessages.slice(-60).forEach(function (message, index) {
+      if (isSystemNotificationMessage(message)) {
+        var notificationNode = document.createElement("div");
+        notificationNode.className = "chat-notification";
+        notificationNode.style.animationDelay = suppressAnimations ? "0ms" : (index * 40) + "ms";
+        notificationNode.innerHTML =
+          '<span class="chat-notification-text">' +
+          escapeHtml(safeText(message.content, "Notificação do sistema")) +
+          "</span>";
+        el.chatPreviewList.appendChild(notificationNode);
+        return;
+      }
+
       var direction = safeText(message.direction, "unknown").toLowerCase();
       var isOutbound = direction === "outbound";
       var isPrivate = direction === "private";
@@ -602,7 +973,8 @@ function renderChatMessages(options) {
         '<span class="sender">' + escapeHtml(senderName) + "</span>" +
         '<span class="status"><span class="status-dot ' + statusDotClass + '"></span>' + escapeHtml(formatChatTime(message.created_at_iso)) + "</span>" +
         "</div>" +
-        '<div class="content">' + escapeHtml(safeText(message.content, "[sem texto]")) + "</div>";
+        '<div class="content">' + escapeHtml(safeText(message.content, "[sem texto]")) + "</div>" +
+        renderChatAttachmentsHtml(message);
 
       wrapper.appendChild(avatar);
       wrapper.appendChild(bubble);
@@ -641,7 +1013,8 @@ function renderChatMessages(options) {
       '<span class="sender">' + escapeHtml(senderName) + "</span>" +
       '<span class="status"><span class="status-dot sent"></span>' + escapeHtml(formatChatTime(message.created_at_iso)) + "</span>" +
       "</div>" +
-      '<div class="content">' + escapeHtml(safeText(message.content, "[sem texto]")) + "</div>";
+      '<div class="content">' + escapeHtml(safeText(message.content, "[sem texto]")) + "</div>" +
+      renderChatAttachmentsHtml(message);
 
     wrapper.appendChild(avatar);
     wrapper.appendChild(bubble);
@@ -1102,16 +1475,83 @@ function collapseTimelineNoise(events) {
   return cleaned;
 }
 
+function buildSyntheticFinalEventsFromHistory(events) {
+  var rows = Array.isArray(events) ? events : [];
+  var synthetic = [];
+
+  state.history.forEach(function (historyItem) {
+    var requestId = safeText(historyItem && historyItem.requestId, "");
+    var historyStatus = normalizeHistoryStatus(historyItem && historyItem.status);
+
+    if (!requestId) {
+      return;
+    }
+    if (historyStatus !== "success" && historyStatus !== "error") {
+      return;
+    }
+
+    var hasFinalEvent = rows.some(function (event) {
+      return safeText(event && event.request_id, "") === requestId && isFinalTimelineEvent(event);
+    });
+    if (hasFinalEvent) {
+      return;
+    }
+
+    var hasRunningEvent = rows.some(function (event) {
+      return safeText(event && event.request_id, "") === requestId && isRunningTimelineEvent(event);
+    });
+    if (!hasRunningEvent) {
+      return;
+    }
+
+    synthetic.push({
+      event_type: "status",
+      source: "local_history",
+      received_at: new Date().toISOString(),
+      request_id: requestId,
+      execution_id: null,
+      workflow_name: null,
+      failed_node: null,
+      conversation_id: safeText(historyItem && historyItem.conversation, "") || null,
+      client: safeText(historyItem && historyItem.client, "") || null,
+      status: historyStatus,
+      category: historyStatus === "success" ? "n8n_execution_success_local" : "n8n_execution_error_local",
+      title: historyStatus === "success" ? "Execução finalizada (painel)" : "Execução finalizada com erro (painel)",
+      likely_cause:
+        historyStatus === "success"
+          ? "Histórico local marcou o reprocessamento como concluído."
+          : "Histórico local marcou o reprocessamento com erro.",
+      suggestion:
+        historyStatus === "success"
+          ? "Execução considerada encerrada no painel."
+          : "Verifique os detalhes da falha no diagnóstico e no n8n.",
+    });
+  });
+
+  if (synthetic.length === 0) {
+    return rows;
+  }
+
+  return synthetic.concat(rows);
+}
+
 function getFilteredN8nEvents() {
   var events = Array.isArray(state.n8nEvents) ? state.n8nEvents : [];
+  var timelineBase = buildSyntheticFinalEventsFromHistory(events);
   var filtered = events.filter(function (event) {
     return (
       matchesTypeFilter(event, state.n8nFilterType) &&
       matchesRequestFilter(event, state.n8nFilterRequest)
     );
   });
+  filtered = timelineBase.filter(function (event) {
+    return (
+      matchesTypeFilter(event, state.n8nFilterType) &&
+      matchesRequestFilter(event, state.n8nFilterRequest)
+    );
+  });
 
-  return collapseTimelineNoise(filtered).slice(0, 30);
+  return collapseTimelineNoise(filtered);
 }
 
 function buildN8nEventsFingerprint(events) {
@@ -1196,10 +1636,29 @@ function renderN8nEvents() {
       ? '<div class="title">Nenhum evento para esse filtro</div><div class="desc">Ajuste os filtros para visualizar os eventos.</div>'
       : '<div class="title">Sem eventos do n8n ainda</div><div class="desc">Envie um reprocessamento para acompanhar a timeline.</div>';
     el.n8nEventsFeed.appendChild(empty);
+    if (hasEl("n8nPageInfo")) {
+      el.n8nPageInfo.textContent = "0 / 0";
+    }
+    if (hasEl("n8nPrevBtn")) {
+      el.n8nPrevBtn.disabled = true;
+    }
+    if (hasEl("n8nNextBtn")) {
+      el.n8nNextBtn.disabled = true;
+    }
     return;
   }
 
-  filteredEvents.slice(0, 15).forEach(function (event) {
+  var totalPages = Math.max(1, Math.ceil(filteredEvents.length / N8N_TIMELINE_PAGE_SIZE));
+  if (state.n8nPage < 1) {
+    state.n8nPage = 1;
+  }
+  if (state.n8nPage > totalPages) {
+    state.n8nPage = totalPages;
+  }
+  var start = (state.n8nPage - 1) * N8N_TIMELINE_PAGE_SIZE;
+  var pageEvents = filteredEvents.slice(start, start + N8N_TIMELINE_PAGE_SIZE);
+
+  pageEvents.forEach(function (event) {
     var type = toTimelineType(event);
     var item = document.createElement("div");
     item.className = "timeline-item";
@@ -1233,6 +1692,16 @@ function renderN8nEvents() {
 
     el.n8nEventsFeed.appendChild(item);
   });
+
+  if (hasEl("n8nPageInfo")) {
+    el.n8nPageInfo.textContent = state.n8nPage + " / " + totalPages;
+  }
+  if (hasEl("n8nPrevBtn")) {
+    el.n8nPrevBtn.disabled = state.n8nPage <= 1;
+  }
+  if (hasEl("n8nNextBtn")) {
+    el.n8nNextBtn.disabled = state.n8nPage >= totalPages;
+  }
 }
 
 async function fetchN8nEvents(options) {
@@ -1290,7 +1759,11 @@ function resetDiagnostic() {
   if (!hasEl("diagnosticPanel")) {
     return;
   }
-  el.diagnosticPanel.classList.remove("is-visible");
+  el.diagnosticPanel.classList.remove("is-visible", "is-error", "is-warning", "is-success", "is-info");
+  var diagHeader = el.diagnosticPanel.querySelector(".diag-header");
+  if (diagHeader) {
+    diagHeader.innerHTML = "&#9888; Diagnóstico de falha";
+  }
   el.dCode.textContent = "-";
   el.dTitle.textContent = "-";
   el.dCause.textContent = "-";
@@ -1308,18 +1781,63 @@ function resetDiagnostic() {
   stopMonitor();
 }
 
+function applyDiagnosticTone(level) {
+  if (!hasEl("diagnosticPanel")) {
+    return;
+  }
+
+  var tone = safeText(level, "info").toLowerCase();
+  var diagHeader = el.diagnosticPanel.querySelector(".diag-header");
+
+  el.diagnosticPanel.classList.remove("is-error", "is-warning", "is-success", "is-info");
+
+  if (tone === "error") {
+    el.diagnosticPanel.classList.add("is-error");
+    if (diagHeader) {
+      diagHeader.innerHTML = "&#9888; Diagnóstico de falha";
+    }
+    return;
+  }
+
+  if (tone === "warning") {
+    el.diagnosticPanel.classList.add("is-warning");
+    if (diagHeader) {
+      diagHeader.innerHTML = "&#9888; Diagnóstico de atenção";
+    }
+    return;
+  }
+
+  if (tone === "success") {
+    el.diagnosticPanel.classList.add("is-success");
+    if (diagHeader) {
+      diagHeader.innerHTML = "&#10003; Status do fluxo";
+    }
+    return;
+  }
+
+  el.diagnosticPanel.classList.add("is-info");
+  if (diagHeader) {
+    diagHeader.innerHTML = "&#9432; Status do fluxo";
+  }
+}
+
 function resetPreviewState() {
   state.previewPayload = null;
   state.previewOriginalPayload = null;
   state.previewMediaMeta = null;
   state.previewClientKey = "";
   state.pauseStatusPreview = null;
+  stopPreviewProgressTimer();
+  if (hasEl("previewProgressWrap")) {
+    el.previewProgressWrap.classList.remove("is-visible", "is-error");
+  }
   el.executeBtn.disabled = true;
   resetDiagnostic();
   el.companyLogoArea.classList.remove("is-visible");
   state.currentConversationUrl = "";
   resetChatState();
   renderPauseSummary(null);
+  renderPauseWarning(null);
   renderMediaStatus(null);
   if (hasEl("editedMessage")) {
     el.editedMessage.value = "";
@@ -1348,6 +1866,7 @@ function renderHistory() {
     empty.innerHTML = '<td colspan="6" style="padding:24px;text-align:center;color:var(--muted);font-size:.85rem">Nenhum reprocessamento ainda nesta sessão.</td>';
     el.historyBody.appendChild(empty);
     updateDashboardStats();
+    renderQueueControl();
     return;
   }
 
@@ -1361,8 +1880,27 @@ function renderHistory() {
 
   pageItems.forEach(function (item) {
     var tr = document.createElement("tr");
-    var statusClass = item.status === "success" ? "success" : item.status === "error" ? "error" : "warning";
-    var statusLabel = item.status === "success" ? "Sucesso" : item.status === "error" ? "Erro" : "Aviso";
+    var normalizedStatus = normalizeHistoryStatus(item.status);
+    var statusClass =
+      normalizedStatus === "success"
+        ? "success"
+        : normalizedStatus === "error"
+          ? "error"
+          : normalizedStatus === "paused"
+            ? "warning"
+            : normalizedStatus === "running"
+              ? "warning"
+              : "neutral";
+    var statusLabel =
+      normalizedStatus === "success"
+        ? "Sucesso"
+        : normalizedStatus === "error"
+          ? "Erro"
+          : normalizedStatus === "paused"
+            ? "Pausado"
+            : normalizedStatus === "running"
+              ? "Em andamento"
+              : "Aviso";
     tr.innerHTML =
       '<td class="mono">' + escapeHtml(item.id) + "</td>" +
       '<td class="mono">' + escapeHtml(item.conversation) + "</td>" +
@@ -1409,9 +1947,8 @@ function renderHistory() {
   }
 
   updateDashboardStats();
+  renderQueueControl();
 }
-
-var ACTIVITY_INITIAL = 5;
 
 function renderActivity() {
   if (!hasEl("activityFeed")) {
@@ -1424,11 +1961,28 @@ function renderActivity() {
     empty.className = "activity-item";
     empty.innerHTML = '<div class="content"><div class="title">Sem eventos por enquanto</div><div class="desc">As execuções e erros aparecerão aqui.</div></div>';
     el.activityFeed.appendChild(empty);
+    if (hasEl("activityPageInfo")) {
+      el.activityPageInfo.textContent = "0 / 0";
+    }
+    if (hasEl("activityPrevBtn")) {
+      el.activityPrevBtn.disabled = true;
+    }
+    if (hasEl("activityNextBtn")) {
+      el.activityNextBtn.disabled = true;
+    }
     return;
   }
 
-  var limit = state.activityExpanded ? state.activity.length : ACTIVITY_INITIAL;
-  var items = state.activity.slice(0, limit);
+  var totalPages = Math.max(1, Math.ceil(state.activity.length / ACTIVITY_PAGE_SIZE));
+  if (state.activityPage < 1) {
+    state.activityPage = 1;
+  }
+  if (state.activityPage > totalPages) {
+    state.activityPage = totalPages;
+  }
+
+  var start = (state.activityPage - 1) * ACTIVITY_PAGE_SIZE;
+  var items = state.activity.slice(start, start + ACTIVITY_PAGE_SIZE);
 
   items.forEach(function (item) {
     var div = document.createElement("div");
@@ -1442,22 +1996,14 @@ function renderActivity() {
     el.activityFeed.appendChild(div);
   });
 
-  if (state.activity.length > ACTIVITY_INITIAL) {
-    var wrap = document.createElement("div");
-    wrap.className = "show-more-wrap";
-
-    var btn = document.createElement("button");
-    btn.className = "show-more-btn" + (state.activityExpanded ? " expanded" : "");
-    btn.innerHTML = state.activityExpanded
-      ? 'Mostrar menos <span class="arrow">&#9650;</span>'
-      : 'Ver mais (' + (state.activity.length - ACTIVITY_INITIAL) + ') <span class="arrow">&#9660;</span>';
-    btn.addEventListener("click", function () {
-      state.activityExpanded = !state.activityExpanded;
-      renderActivity();
-    });
-
-    wrap.appendChild(btn);
-    el.activityFeed.appendChild(wrap);
+  if (hasEl("activityPageInfo")) {
+    el.activityPageInfo.textContent = state.activityPage + " / " + totalPages;
+  }
+  if (hasEl("activityPrevBtn")) {
+    el.activityPrevBtn.disabled = state.activityPage <= 1;
+  }
+  if (hasEl("activityNextBtn")) {
+    el.activityNextBtn.disabled = state.activityPage >= totalPages;
   }
 }
 
@@ -1467,7 +2013,8 @@ function pushHistory(status, message) {
     id: "RP-" + String(now.getTime()).slice(-6),
     conversation: getConversationId() || "-",
     client: state.previewClientKey || "-",
-    status: status,
+    status: normalizeHistoryStatus(status),
+    message: safeText(message, "-"),
     date: now.toLocaleString("pt-BR"),
     duration: "-",
     requestId: safeText(state.activeRunRequestId, ""),
@@ -1484,8 +2031,11 @@ function normalizeHistoryStatus(value) {
   if (status === "failed") {
     return "error";
   }
-  if (status === "running" || status === "pending" || status === "new" || status === "waiting") {
-    return "warning";
+  if (status === "running" || status === "pending" || status === "new" || status === "waiting" || status === "in_progress" || status === "warning") {
+    return "running";
+  }
+  if (status === "paused" || status === "skipped") {
+    return "paused";
   }
   if (status === "success") {
     return "success";
@@ -1493,7 +2043,140 @@ function normalizeHistoryStatus(value) {
   if (status === "error") {
     return "error";
   }
-  return "warning";
+  return "neutral";
+}
+
+function isHistoryTerminalStatus(status) {
+  var normalized = normalizeHistoryStatus(status);
+  return normalized === "success" || normalized === "error" || normalized === "paused";
+}
+
+function getPendingQueueEntries() {
+  return state.history.filter(function (item) {
+    return !isHistoryTerminalStatus(item && item.status);
+  });
+}
+
+function hasPendingRunForClient(clientKey) {
+  var normalizedClient = safeText(clientKey, "");
+  if (!normalizedClient) {
+    return false;
+  }
+
+  return getPendingQueueEntries().some(function (entry) {
+    return safeText(entry && entry.client, "") === normalizedClient;
+  });
+}
+
+function renderQueueControl() {
+  if (!hasEl("queueList") || !hasEl("queuePendingCount")) {
+    return;
+  }
+
+  var pending = getPendingQueueEntries();
+  el.queuePendingCount.textContent = String(pending.length);
+  el.queueList.innerHTML = "";
+
+  if (pending.length === 0) {
+    var empty = document.createElement("div");
+    empty.className = "queue-empty";
+    empty.textContent = "Sem pendências na fila local.";
+    el.queueList.appendChild(empty);
+    return;
+  }
+
+  pending.slice(0, 80).forEach(function (entry) {
+    var row = document.createElement("div");
+    row.className = "queue-row";
+    row.setAttribute("data-history-id", safeText(entry && entry.id, ""));
+
+    var client = formatClientKeyForDisplay(entry && entry.client);
+    var conversation = safeText(entry && entry.conversation, "-");
+    var requestId = safeText(entry && entry.requestId, "-");
+    var status = normalizeHistoryStatus(entry && entry.status);
+
+    row.innerHTML =
+      '<div class="queue-main">' +
+      '<span class="queue-pill running">' + (status === "running" ? "Em andamento" : "Pendente") + "</span>" +
+      '<span class="queue-pill">cliente: ' + escapeHtml(client) + "</span>" +
+      '<span class="queue-pill">conversa: ' + escapeHtml(conversation) + "</span>" +
+      '<span class="queue-meta">req: ' + escapeHtml(requestId) + "</span>" +
+      "</div>" +
+      '<button class="queue-remove-btn" type="button" data-remove-id="' + escapeHtml(safeText(entry && entry.id, "")) + '">Remover</button>';
+
+    el.queueList.appendChild(row);
+  });
+}
+
+function removeQueueEntryByHistoryId(historyId) {
+  var needle = safeText(historyId, "");
+  if (!needle) {
+    return;
+  }
+
+  state.history = state.history.filter(function (item) {
+    return safeText(item && item.id, "") !== needle;
+  });
+
+  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
+  renderHistory();
+  showToast("Item removido da fila local.", "success");
+}
+
+function dedupePendingQueue() {
+  var seen = new Set();
+  var removed = 0;
+
+  state.history = state.history.filter(function (item) {
+    var status = normalizeHistoryStatus(item && item.status);
+    if (isHistoryTerminalStatus(status)) {
+      return true;
+    }
+
+    var key =
+      safeText(item && item.client, "-") +
+      "|" +
+      safeText(item && item.conversation, "-");
+
+    if (seen.has(key)) {
+      removed += 1;
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+
+  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
+  renderHistory();
+  showToast(
+    removed > 0
+      ? String(removed) + " duplicata(s) removida(s) da fila local."
+      : "Nenhuma duplicata pendente encontrada.",
+    removed > 0 ? "success" : "error",
+  );
+}
+
+function clearPendingQueue() {
+  var pendingBefore = getPendingQueueEntries().length;
+  if (pendingBefore === 0) {
+    showToast("Fila já está vazia.", "error");
+    return;
+  }
+
+  state.history = state.history.filter(function (item) {
+    return isHistoryTerminalStatus(item && item.status);
+  });
+
+  state.activeRunRequestId = "";
+  state.activeRunStartedAt = 0;
+  state.activeRunClientKey = "";
+  stopMonitor();
+  stopChatMonitor();
+  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
+  renderHistory();
+  setStatus("Pendências da fila local foram limpas.", false);
+  showToast("Fila pendente limpa com sucesso.", "success");
 }
 
 function shouldReplaceHistoryStatus(currentStatus, nextStatus) {
@@ -1512,11 +2195,15 @@ function shouldReplaceHistoryStatus(currentStatus, nextStatus) {
     return true;
   }
 
-  if (current === "error" && next === "warning") {
+  if (current === "error" && (next === "running" || next === "neutral")) {
     return false;
   }
 
-  if (current === "warning" && next === "error") {
+  if ((current === "running" || current === "neutral" || current === "paused") && next === "error") {
+    return true;
+  }
+
+  if (current === "running" && next === "paused") {
     return true;
   }
 
@@ -1550,7 +2237,21 @@ function updateHistoryByRequestId(requestId, status, message) {
   if (shouldReplaceHistoryStatus(state.history[idx].status, status)) {
     state.history[idx].status = normalizeHistoryStatus(status);
   }
+  if (safeText(message, "")) {
+    state.history[idx].message = safeText(message, "");
+  }
   state.history[idx].duration = duration;
+
+  if (
+    safeText(state.activeRunRequestId, "") &&
+    safeText(state.activeRunRequestId, "") === needle &&
+    isHistoryTerminalStatus(state.history[idx].status)
+  ) {
+    state.activeRunRequestId = "";
+    state.activeRunStartedAt = 0;
+    state.activeRunClientKey = "";
+  }
+
   writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
   renderHistory();
   return true;
@@ -1559,11 +2260,12 @@ function updateHistoryByRequestId(requestId, status, message) {
 function pushActivity(type, title, desc) {
   state.activity.unshift({
     type: type,
-    title: title,
-    desc: desc,
+    title: truncateText(title, 90),
+    desc: truncateText(desc, 240),
     time: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
   });
-  state.activity = state.activity.slice(0, 200);
+  state.activity = state.activity.slice(0, ACTIVITY_MAX_ITEMS);
+  state.activityPage = 1;
   writeStorageJson(ACTIVITY_STORAGE_KEY, state.activity);
   renderActivity();
 }
@@ -1676,6 +2378,10 @@ function renderPauseSummary(pausePreview) {
   if (!pauseStatus) {
     el.sPauseStatus.textContent = "-";
     el.sPauseDetails.textContent = "-";
+    renderPauseWarning(null);
+    if (hasEl("removePauseBtn")) {
+      el.removePauseBtn.disabled = true;
+    }
     return;
   }
 
@@ -1701,6 +2407,19 @@ function renderPauseSummary(pausePreview) {
     " | match=" + matched +
     " | origem=" + source +
     " | reason=" + reason;
+  renderPauseWarning(pauseStatus);
+  if (hasEl("removePauseBtn")) {
+    var canRemove = Boolean(
+      pauseStatus.paused === true &&
+      state.previewPayload &&
+      state.previewClientKey,
+    );
+    el.removePauseBtn.disabled = !canRemove;
+  }
+
+  if (hasEl("executeBtn") && pauseStatus.paused === true) {
+    el.executeBtn.disabled = true;
+  }
 }
 
 async function fetchPauseStatusPreview(options) {
@@ -1728,7 +2447,12 @@ async function fetchPauseStatusPreview(options) {
 
     if (!response.ok || !data || !data.success) {
       if (!silent) {
-        setStatus(safeText(data && data.message, "Falha ao consultar status de pausa."), true);
+        setStatus(
+          normalizeBackendErrorMessage(
+            safeText(data && data.message, "Falha ao consultar status de pausa."),
+          ),
+          true,
+        );
       }
       state.pauseStatusPreview = null;
       renderPauseSummary(null);
@@ -1740,7 +2464,11 @@ async function fetchPauseStatusPreview(options) {
     return data;
   } catch (error) {
     if (!silent) {
-      setStatus("Erro ao consultar status de pausa: " + safeText(error && error.message, "erro"), true);
+      setStatus(
+        "Erro ao consultar status de pausa: " +
+          normalizeBackendErrorMessage(safeText(error && error.message, "erro")),
+        true,
+      );
     }
     state.pauseStatusPreview = null;
     renderPauseSummary(null);
@@ -1800,6 +2528,95 @@ function fillSummary(previewData) {
   } else {
     el.companyLogoArea.classList.remove("logo-ink-dark");
     el.companyLogoArea.classList.remove("is-visible");
+  }
+}
+
+async function removePauseForCurrentPreview() {
+  if (!state.previewPayload || !state.previewClientKey) {
+    setStatus("Gere o preview antes de remover a pausa.", true);
+    return;
+  }
+
+  if (state.pauseStatusPreview && state.pauseStatusPreview.pause_status && state.pauseStatusPreview.pause_status.paused !== true) {
+    setStatus("Contato nao esta pausado no momento.", true);
+    return;
+  }
+
+  if (hasEl("removePauseBtn")) {
+    el.removePauseBtn.disabled = true;
+  }
+
+  setStatus("Removendo contato da tabela de pausa...", false);
+
+  try {
+    const response = await fetch("/api/reprocess/pause-remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client: state.previewClientKey,
+        payload: state.previewPayload,
+      }),
+    });
+    const data = await readJsonSafe(response);
+
+    if (!response.ok || !data || !data.success) {
+      setStatus(
+        normalizeBackendErrorMessage(
+          safeText(data && data.message, "Falha ao remover contato da pausa."),
+        ),
+        true,
+      );
+      pushActivity(
+        "error",
+        "Falha ao remover pausa",
+        normalizeBackendErrorMessage(
+          safeText(data && data.message, "Erro desconhecido ao remover pausa."),
+        ),
+      );
+      showToast("Falha ao remover da IA pausada.", "error");
+      return;
+    }
+
+    const removed = Boolean(data && data.pause_remove && data.pause_remove.removed);
+    if (removed) {
+      setStatus("Contato removido da IA pausada com sucesso.", false);
+      pushActivity(
+        "success",
+        "Contato despausado",
+        "Registro removido da tabela de pausa no Supabase.",
+      );
+      showToast("Contato removido da IA pausada.", "success");
+      if (hasEl("sPauseStatus")) {
+        el.sPauseStatus.textContent = "REMOVIDO AGORA";
+      }
+      if (hasEl("sPauseDetails")) {
+        el.sPauseDetails.textContent = "Registro removido manualmente via painel.";
+      }
+      if (hasEl("removePauseBtn")) {
+        el.removePauseBtn.textContent = "Removido com sucesso";
+      }
+    } else {
+      setStatus("Contato nao encontrado na tabela de pausa.", true);
+      pushActivity(
+        "warning",
+        "Contato nao encontrado",
+        "Nenhum registro foi removido da tabela de pausa.",
+      );
+      showToast("Nenhum registro de pausa encontrado para remover.", "error");
+    }
+
+    await fetchPauseStatusPreview({
+      silent: true,
+      payload: state.previewPayload,
+      client: state.previewClientKey,
+    });
+  } catch (error) {
+    var normalizedRemoveError = normalizeBackendErrorMessage(safeText(error && error.message, "erro"));
+    setStatus("Erro ao remover pausa: " + normalizedRemoveError, true);
+    pushActivity("error", "Erro de rede", normalizedRemoveError);
+    showToast("Erro de rede ao remover da IA pausada.", "error");
+  } finally {
+    renderPauseSummary(state.pauseStatusPreview);
   }
 }
 
@@ -1881,6 +2698,7 @@ async function generatePreview() {
   }
   var url = (el.conversationUrl.value || "").trim();
   var selectedClient = (el.clientSelect.value || "").trim();
+  var selectedMessageCount = parseMessageCount();
 
   if (!url) {
     setStatus("Informe o link da conversa.", true);
@@ -1891,10 +2709,42 @@ async function generatePreview() {
   state.currentConversationUrl = url;
   el.previewBtn.disabled = true;
   setPipelineStep(1);
-  setStatus("Gerando preview no servidor...", false);
+  startPreviewProgressFlow();
+  setStatus("Carregando mensagens da conversa...", false);
   showCards(true);
   setChatPreviewStatus("Carregando conversa original...");
+  setPreviewProgress(18, "Buscando mensagens no Chatwoot...");
   await fetchChatMessages({ silent: false, limit: 120, conversationUrl: url });
+  setPreviewProgress(30, "Analisando conteúdo e mídias...");
+  var prePreviewMediaSignal = detectMediaFromChatMessages(state.chatMessages, selectedMessageCount);
+  var prePreviewMediaNotice = buildPrePreviewMediaNotice(prePreviewMediaSignal);
+  if (prePreviewMediaNotice) {
+    setStatus(prePreviewMediaNotice, false);
+    pushActivity("warning", "Mídia detectada antes do preview", prePreviewMediaNotice);
+    var confirmMediaPreview = true;
+    if (typeof window.openConfirmModal === "function") {
+      confirmMediaPreview = await window.openConfirmModal(
+        prePreviewMediaNotice + " Deseja continuar com a geração do preview agora?",
+      );
+    } else {
+      confirmMediaPreview = window.confirm(
+        prePreviewMediaNotice + " Deseja continuar com a geração do preview agora?",
+      );
+    }
+    if (!confirmMediaPreview) {
+      setStatus("Geração do preview cancelada para revisão de mídia.", true);
+      pushActivity("warning", "Preview cancelado", "Operador cancelou a geração após aviso de mídia.");
+      setPipelineStep(0);
+      finishPreviewProgressFlow(true, "Preview cancelado pelo operador.");
+      el.previewBtn.disabled = false;
+      return;
+    }
+    setPreviewProgress(42, "Mídia detectada. Preparando enriquecimento por IA...");
+    setStatus("Gerando preview no servidor com processamento de mídia...", false);
+  } else {
+    setPreviewProgress(42, "Gerando preview no servidor...");
+    setStatus("Sem mídia detectada na pré-análise. Gerando preview no servidor...", false);
+  }
 
   try {
     var response = await fetch("/api/reprocess/preview", {
@@ -1903,18 +2753,23 @@ async function generatePreview() {
       body: JSON.stringify({
         conversationUrl: url,
         client: selectedClient || undefined,
-        messageCount: parseMessageCount(),
+        messageCount: selectedMessageCount,
       }),
     });
 
     var data = await readJsonSafe(response);
+    setPreviewProgress(86, "Processando resposta do preview...");
     el.output.textContent = JSON.stringify(data, null, 2);
 
     if (!response.ok || !Array.isArray(data) || data.length === 0) {
       if (data && typeof data === "object" && !Array.isArray(data)) {
         fillDiagnostic(data);
       }
-      throw new Error((data && data.message) || "Falha ao gerar preview.");
+      throw new Error(
+        normalizeBackendErrorMessage(
+          safeText(data && data.message, "Falha ao gerar preview."),
+        ),
+      );
     }
 
     state.previewPayload = data;
@@ -1982,6 +2837,7 @@ async function generatePreview() {
     if (pausePreview && pausePreview.pause_status && pausePreview.pause_status.paused === true) {
       setPipelineStep(2);
       setStatus("Preview gerado. Contato está pausado no Supabase (verifique no resumo).", true);
+      el.executeBtn.disabled = true;
       pushActivity(
         "warning",
         "Contato pausado detectado",
@@ -1992,6 +2848,7 @@ async function generatePreview() {
       setStatus("Preview gerado. Revise e clique em Reprocessar.", false);
     }
     pushActivity("success", "Preview gerado", "Payload pronto para revisão.");
+    finishPreviewProgressFlow(false, "Preview JSON gerado com sucesso.");
   } catch (error) {
     setPipelineStep(0);
     if (!Array.isArray(state.chatMessages) || state.chatMessages.length === 0) {
@@ -2000,8 +2857,10 @@ async function generatePreview() {
       showCards(true);
       setChatPreviewStatus("Preview falhou, mas as mensagens da conversa foram carregadas.");
     }
-    setStatus(error.message, true);
-    pushActivity("error", "Falha ao gerar preview", error.message);
+    var previewErrorMessage = normalizeBackendErrorMessage(safeText(error && error.message, "Falha ao gerar preview."));
+    setStatus(previewErrorMessage, true);
+    pushActivity("error", "Falha ao gerar preview", previewErrorMessage);
+    finishPreviewProgressFlow(true, "Falha ao gerar preview.");
   } finally {
     el.previewBtn.disabled = false;
   }
@@ -2043,6 +2902,7 @@ function fillN8nDiagnostic(event) {
   }
 
   el.diagnosticPanel.classList.add("is-visible");
+  applyDiagnosticTone(toTimelineType(event));
   el.dWorkflow.textContent = normalizeLegacyPtBr(safeText(event.workflow_name, "-"));
   el.dNode.textContent = normalizeLegacyPtBr(safeText(event.failed_node, "-"));
   el.dExecution.textContent = normalizeLegacyPtBr(safeText(event.execution_id, "-"));
@@ -2079,6 +2939,7 @@ function fillDiagnostic(errorPayload) {
   var details = (errorPayload && errorPayload.details) || {};
 
   el.diagnosticPanel.classList.add("is-visible");
+  applyDiagnosticTone("error");
   el.dCode.textContent = normalizeLegacyPtBr(safeText(errorPayload.error, "-"));
   el.dTitle.textContent = normalizeLegacyPtBr(safeText(details.title, "-"));
   el.dCause.textContent = normalizeLegacyPtBr(safeText(details.likely_cause || errorPayload.message, "-"));
@@ -2141,7 +3002,13 @@ function fillFlowStatus(event) {
     return;
   }
 
+  var tone = toTimelineType(event);
+  if (safeText(event.category, "").toLowerCase() === "webhook_dispatched") {
+    tone = "info";
+  }
+
   el.diagnosticPanel.classList.add("is-visible");
+  applyDiagnosticTone(tone);
   el.dCode.textContent = safeText(event.category, "flow_status");
   el.dTitle.textContent = safeText(event.title, "Status do fluxo n8n");
   el.dCause.textContent = safeText(event.likely_cause, "-");
@@ -2245,7 +3112,10 @@ async function fetchLatestN8nStatus(options) {
       var data = await readJsonSafe(response);
 
       if (response.ok && data && data.success && data.found && data.event) {
-        fillFlowStatus(data.event);
+        var statusCategory = safeText(data.event && data.event.category, "").toLowerCase();
+        if (statusCategory !== "webhook_dispatched") {
+          fillFlowStatus(data.event);
+        }
         if (!silent) {
           setStatus("Status do n8n encontrado.", false);
         }
@@ -2348,7 +3218,39 @@ function startPostExecuteMonitor() {
       setStatus("Monitor do fluxo encerrado por timeout (10 min).", true);
       pushActivity("warning", "Monitor encerrado", "Não foi possível confirmar a conclusão do fluxo dentro do tempo limite.");
       showToast("Monitor encerrado por timeout. Consulte o n8n para detalhes.", "error");
-      updateHistoryByRequestId(state.activeRunRequestId, "warning", "Monitor encerrado por timeout sem status final do n8n.");
+      updateHistoryByRequestId(state.activeRunRequestId, "running", "Monitor encerrado por timeout sem status final do n8n.");
+      stopMonitor();
+      return;
+    }
+
+    if (
+      state.activeRunStartedAt > 0 &&
+      Date.now() - state.activeRunStartedAt >= FORCE_COMPLETE_RUNNING_AFTER_MS &&
+      state.activeRunRequestId &&
+      getHistoryStatusByRequestId(state.activeRunRequestId) !== "error"
+    ) {
+      pushLocalN8nTimelineEvent({
+        category: "n8n_execution_success_forced",
+        status: "success",
+        title: "Execução finalizada (assumida)",
+        likely_cause:
+          "Fluxo permaneceu em execução por tempo prolongado sem erro explícito. Marcado como concluído no painel.",
+        suggestion:
+          "Se necessário, valide os detalhes finais diretamente no n8n.",
+      });
+      setPipelineStep(4);
+      setStatus("Reprocessamento marcado como concluído no painel.", false);
+      pushActivity(
+        "success",
+        "Fluxo finalizado (forçado)",
+        "Execução em andamento por muito tempo; status ajustado para concluído no painel.",
+      );
+      updateHistoryByRequestId(
+        state.activeRunRequestId,
+        "success",
+        "Concluído no painel após tempo limite de execução em andamento.",
+      );
+      showToast("Execução marcada como concluída no painel.", "success");
       stopMonitor();
       return;
     }
@@ -2413,7 +3315,7 @@ function startPostExecuteMonitor() {
       if (state.monitorRunningTicks >= 10) {
         setStatus("Fluxo ainda em andamento no n8n. Aguardando conclusão final...", false);
         pushActivity("warning", "Fluxo em andamento", "Execução segue como running por mais tempo que o esperado.");
-        updateHistoryByRequestId(state.activeRunRequestId, "warning", "Fluxo em andamento no n8n (sem status final ainda).");
+        updateHistoryByRequestId(state.activeRunRequestId, "running", "Fluxo em andamento no n8n (sem status final ainda).");
         state.monitorRunningTicks = 0;
       }
     } finally {
@@ -2428,6 +3330,22 @@ async function executeReprocess() {
   }
   if (!state.previewPayload || !state.previewClientKey) {
     setStatus("Gere o preview primeiro.", true);
+    return;
+  }
+  if (state.pauseStatusPreview && state.pauseStatusPreview.pause_status && state.pauseStatusPreview.pause_status.paused === true) {
+    setStatus("Contato pausado no Supabase. Remova da IA pausada antes de reprocessar.", true);
+    showToast("Contato pausado. Reprocessamento bloqueado.", "error");
+    renderPauseWarning(state.pauseStatusPreview.pause_status);
+    return;
+  }
+  if (hasPendingRunForClient(state.previewClientKey)) {
+    setStatus(
+      "Já existe reprocessamento pendente para " +
+        formatClientKeyForDisplay(state.previewClientKey) +
+        ". Use o Controle de fila para limpar duplicatas antes de enviar outro.",
+      true,
+    );
+    showToast("Cliente já possui reprocessamento pendente.", "error");
     return;
   }
 
@@ -2451,6 +3369,7 @@ async function executeReprocess() {
   resetDiagnostic();
   state.activeRunRequestId = "";
   state.activeRunStartedAt = 0;
+  state.activeRunClientKey = "";
   state.chatNewOutgoingMessages = [];
   await fetchChatMessages({ silent: true, limit: 120, suppressAnimations: true });
   setChatBaselineFromMessages(state.chatMessages);
@@ -2478,14 +3397,17 @@ async function executeReprocess() {
     }
 
     if (!response.ok || !data || !data.success) {
+      var executeErrorMessage = normalizeBackendErrorMessage(
+        safeText(data && data.message, "Falha ao executar."),
+      );
       setPipelineStep(4);
       fillDiagnostic(data || {});
       await fetchLatestN8nError({ attempts: 3, delayMs: 1200, silent: true });
       await fetchN8nEvents({ silent: true, limit: 30 });
       await fetchChatMessages({ silent: true, limit: 120, suppressAnimations: true });
-      pushHistory("error", safeText(data && data.message, "Falha ao executar."));
-      pushActivity("error", "Falha no reprocessamento", safeText(data && data.message, "Erro desconhecido."));
-      setStatus(safeText(data && data.message, "Falha ao executar."), true);
+      pushHistory("error", executeErrorMessage);
+      pushActivity("error", "Falha no reprocessamento", executeErrorMessage);
+      setStatus(executeErrorMessage, true);
       setChatPreviewStatus("Reprocesso falhou. Chat mantido para analise.");
       return;
     }
@@ -2515,34 +3437,42 @@ async function executeReprocess() {
 
     if (data.skipped && data.status === "paused") {
       setPipelineStep(4);
-      pushHistory("warning", data.message || "Contato pausado");
+      pushHistory("paused", data.message || "Contato pausado");
       pushActivity("warning", "Contato pausado", data.message || "Reprocessamento não enviado.");
       setStatus(data.message || "Contato pausado.", true);
       showToast(data.message || "Contato pausado. Reprocessamento não enviado.", "error");
+      state.activeRunRequestId = "";
+      state.activeRunStartedAt = 0;
+      state.activeRunClientKey = "";
       return;
     }
 
     state.activeRunRequestId = safeText(data.request_id, "");
     state.activeRunStartedAt = Date.now();
+    state.activeRunClientKey = state.previewClientKey;
     state.n8nFilterRequest = state.activeRunRequestId;
     if (hasEl("n8nRequestFilter")) {
       el.n8nRequestFilter.value = state.activeRunRequestId;
     }
-    pushHistory("warning", "Payload enviado ao webhook. Aguardando conclusão do fluxo.");
+    pushHistory("running", "Payload enviado ao webhook. Aguardando conclusão do fluxo.");
     startPostExecuteMonitor();
     startChatPostReprocessMonitor();
     await fetchLatestN8nStatus({ attempts: 2, delayMs: 900, silent: true });
     await fetchN8nEvents({ silent: true, limit: 30, client: state.previewClientKey });
 
-    pushActivity("success", "Reprocessamento enviado", data.message || "Webhook recebeu o payload inicial.");
-    setStatus("Reprocessamento enviado com sucesso. Aguardando conclusão do fluxo no n8n...", false);
-    showToast("Reprocessamento enviado com sucesso.", "success");
+    pushActivity("warning", "Payload enviado ao webhook", data.message || "Webhook recebeu a requisição inicial de reprocessamento.");
+    setStatus("Payload enviado ao webhook. Aguardando conclusão final do fluxo no n8n...", false);
+    showToast("Reprocessamento iniciado. Aguardando conclusão final.", "success");
   } catch (error) {
+    var executeCatchMessage = normalizeBackendErrorMessage(safeText(error && error.message, "Erro ao executar reprocessamento."));
     setPipelineStep(4);
-    pushHistory("error", error.message);
-    pushActivity("error", "Erro de execução", error.message);
-    setStatus(error.message, true);
-    showToast(error.message, "error");
+    pushHistory("error", executeCatchMessage);
+    pushActivity("error", "Erro de execução", executeCatchMessage);
+    setStatus(executeCatchMessage, true);
+    showToast(executeCatchMessage, "error");
+    state.activeRunRequestId = "";
+    state.activeRunStartedAt = 0;
+    state.activeRunClientKey = "";
   } finally {
     el.executeBtn.disabled = false;
   }
@@ -2623,30 +3553,90 @@ onEl("executeBtn", "click", async function() {
   executeReprocess();
 });
 onEl("clearDiagnosticBtn", "click", resetDiagnostic);
+onEl("removePauseBtn", "click", async function () {
+  var confirmed = await openPauseRemoveModal();
+  if (!confirmed) {
+    return;
+  }
+  removePauseForCurrentPreview();
+});
 onEl("refreshHistory", "click", function () {
   renderHistory();
   setStatus("Histórico local atualizado.", false);
 });
+onEl("queueDedupeBtn", "click", function () {
+  dedupePendingQueue();
+});
+onEl("queueClearBtn", "click", async function () {
+  var confirmed = true;
+  if (typeof window.openConfirmModal === "function") {
+    confirmed = await window.openConfirmModal(
+      "Deseja limpar todas as pendências da fila local?",
+    );
+  }
+  if (!confirmed) {
+    return;
+  }
+  clearPendingQueue();
+});
 onEl("refreshN8nEventsBtn", "click", function () {
   fetchN8nEvents({ silent: false, limit: 30 });
+});
+onEl("n8nPrevBtn", "click", function () {
+  if (state.n8nPage > 1) {
+    state.n8nPage -= 1;
+    renderN8nEvents();
+  }
+});
+onEl("n8nNextBtn", "click", function () {
+  var totalPages = Math.max(1, Math.ceil(getFilteredN8nEvents().length / N8N_TIMELINE_PAGE_SIZE));
+  if (state.n8nPage < totalPages) {
+    state.n8nPage += 1;
+    renderN8nEvents();
+  }
 });
 onEl("refreshChatPreviewBtn", "click", function () {
   fetchChatMessages({ silent: false, limit: 120 });
 });
 onEl("n8nTypeFilter", "change", function () {
   state.n8nFilterType = safeText(el.n8nTypeFilter.value, "all").toLowerCase();
+  state.n8nPage = 1;
   renderN8nEvents();
 });
 onEl("n8nRequestFilter", "input", function () {
   state.n8nFilterRequest = safeText(el.n8nRequestFilter.value, "");
+  state.n8nPage = 1;
   renderN8nEvents();
 });
 onEl("clearN8nFiltersBtn", "click", function () {
   state.n8nFilterType = "all";
   state.n8nFilterRequest = "";
+  state.n8nPage = 1;
   el.n8nTypeFilter.value = "all";
   el.n8nRequestFilter.value = "";
   renderN8nEvents();
+});
+onEl("queueList", "click", function (event) {
+  var target = event && event.target && event.target.closest
+    ? event.target.closest("[data-remove-id]")
+    : null;
+  if (!target) {
+    return;
+  }
+  removeQueueEntryByHistoryId(target.getAttribute("data-remove-id"));
+});
+onEl("activityPrevBtn", "click", function () {
+  if (state.activityPage > 1) {
+    state.activityPage -= 1;
+    renderActivity();
+  }
+});
+onEl("activityNextBtn", "click", function () {
+  var totalPages = Math.max(1, Math.ceil(state.activity.length / ACTIVITY_PAGE_SIZE));
+  if (state.activityPage < totalPages) {
+    state.activityPage += 1;
+    renderActivity();
+  }
 });
 
 onEl("n8nLookupBtn", "click", function () {
@@ -2680,7 +3670,7 @@ onEl("n8nLookupBtn", "click", function () {
   if (Array.isArray(persistedActivity)) {
     state.activity = persistedActivity.filter(function (item) {
       return item && typeof item === "object";
-    }).slice(0, 200);
+    }).slice(0, ACTIVITY_MAX_ITEMS);
   }
   renderHistory();
   renderActivity();
@@ -2697,6 +3687,58 @@ onEl("n8nLookupBtn", "click", function () {
   startN8nEventsPolling();
   loadClients();
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+
+  if (pauseRemoveModalOk) {
+    pauseRemoveModalOk.addEventListener("click", function () {
+      closePauseRemoveModal(true);
+    });
+  }
+  if (pauseRemoveModalCancel) {
+    pauseRemoveModalCancel.addEventListener("click", function () {
+      closePauseRemoveModal(false);
+    });
+  }
+  if (pauseRemoveModal) {
+    pauseRemoveModal.addEventListener("click", function (event) {
+      var target = event.target;
+      if (target && target.getAttribute && target.getAttribute("data-pause-remove-close") === "true") {
+        closePauseRemoveModal(false);
+      }
+    });
+  }
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && pauseRemoveModal && pauseRemoveModal.classList.contains("is-open")) {
+      closePauseRemoveModal(false);
+    }
+    if (event.key === "Escape" && imagePreviewModal && imagePreviewModal.classList.contains("is-open")) {
+      closeImagePreviewModal();
+    }
+  });
+
+  if (imagePreviewCloseBtn) {
+    imagePreviewCloseBtn.addEventListener("click", closeImagePreviewModal);
+  }
+  if (imagePreviewModal) {
+    imagePreviewModal.addEventListener("click", function (event) {
+      var target = event.target;
+      if (target && target.getAttribute && target.getAttribute("data-media-preview-close") === "true") {
+        closeImagePreviewModal();
+      }
+    });
+  }
+
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || !target.closest) {
+      return;
+    }
+    var imageButton = target.closest("[data-image-preview-url]");
+    if (!imageButton) {
+      return;
+    }
+    event.preventDefault();
+    openImagePreviewModal(imageButton.getAttribute("data-image-preview-url"));
+  });
 })();
 
 /* ── Sidebar toggle & page navigation ── */
@@ -2800,8 +3842,19 @@ onEl("n8nLookupBtn", "click", function () {
 
   function navigateTo(pageId) {
     if (!pageId) return;
-    var normalized = pageId === "configuracoes" ? "configuracoes" : "reprocessador";
-    var routePath = normalized === "configuracoes" ? "/configuracoes" : "/reprocessador";
+    var normalized = "reprocessador";
+    if (pageId === "configuracoes") {
+      normalized = "configuracoes";
+    } else if (pageId === "ajuda") {
+      normalized = "ajuda";
+    }
+
+    var routePath = "/reprocessador";
+    if (normalized === "configuracoes") {
+      routePath = "/configuracoes";
+    } else if (normalized === "ajuda") {
+      routePath = "/ajuda";
+    }
     document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('is-active'); });
     document.querySelectorAll('[data-page]').forEach(function(l) { l.classList.remove('active'); });
     var target = document.getElementById('page-' + normalized);
@@ -2856,9 +3909,38 @@ onEl("n8nLookupBtn", "click", function () {
     navigateTo(initialHash);
   } else if (window.location.pathname === "/configuracoes") {
     navigateTo("configuracoes");
+  } else if (window.location.pathname === "/ajuda") {
+    navigateTo("ajuda");
   } else {
     navigateTo("reprocessador");
   }
+
+  /* ── FAQ accordion ── */
+  document.querySelectorAll('.faq-question').forEach(function(q){
+    q.addEventListener('click',function(){
+      var expanded=this.getAttribute('aria-expanded')==='true';
+      document.querySelectorAll('.faq-question').forEach(function(o){o.setAttribute('aria-expanded','false');o.nextElementSibling.setAttribute('aria-hidden','true');});
+      if(!expanded){this.setAttribute('aria-expanded','true');this.nextElementSibling.setAttribute('aria-hidden','false');}
+    });
+  });
+  document.querySelectorAll('.help-card-link[data-scroll]').forEach(function(lk){
+    lk.addEventListener('click',function(e){
+      e.preventDefault();
+      var target=document.getElementById(this.getAttribute('data-scroll'));
+      if(target){
+        var faqQ=target.closest('.faq-item')?target:target.querySelector('.faq-question');
+        if(faqQ){faqQ.setAttribute('aria-expanded','true');faqQ.nextElementSibling.setAttribute('aria-hidden','false');}
+        setTimeout(function(){target.scrollIntoView({behavior:'smooth',block:'start'});},100);
+      }
+    });
+  });
+  document.querySelectorAll('.help-card-link[data-page-nav]').forEach(function(lk){
+    lk.addEventListener('click',function(e){
+      e.preventDefault();
+      var pageId=this.getAttribute('data-page-nav');
+      if(typeof navigateTo==='function')navigateTo(pageId);
+    });
+  });
 })();
 
 /* ── Ripple effect on primary buttons ── */
