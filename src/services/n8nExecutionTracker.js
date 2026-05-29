@@ -367,11 +367,11 @@ export async function scheduleExecutionReconciliation({
         });
 
         if (result.ok && result.event && typeof onEvent === "function") {
-          onEvent(result.event);
+          await onEvent(result.event);
         }
       } catch (error) {
         if (typeof onFailure === "function") {
-          onFailure(error);
+          await onFailure(error);
         }
       }
     }, delay);

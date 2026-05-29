@@ -51,7 +51,6 @@ loadEnvFile();
 const config = getConfig();
 assertRequiredConfig(config);
 configureN8nEventStore({
-  filePath: config.n8nEventStorePath,
   maxEvents: config.n8nEventStoreMaxEvents,
 });
 configureAuthAuditStore();
@@ -133,17 +132,16 @@ function getRequestPath(req) {
 }
 
 function registerAuthAudit(req, payload = {}) {
-  try {
-    return registerAuthAuditEvent({
-      ...payload,
-      ip: payload.ip || getClientIp(req),
-      user_agent: payload.user_agent || String(req.headers["user-agent"] || "").slice(0, 360),
-      request_path: payload.request_path || getRequestPath(req),
-      request_method: payload.request_method || String(req.method || "GET").toUpperCase(),
-    });
-  } catch {
-    return null;
-  }
+  const enrichedPayload = {
+    ...payload,
+    ip: payload.ip || getClientIp(req),
+    user_agent: payload.user_agent || String(req.headers["user-agent"] || "").slice(0, 360),
+    request_path: payload.request_path || getRequestPath(req),
+    request_method: payload.request_method || String(req.method || "GET").toUpperCase(),
+  };
+
+  registerAuthAuditEvent(enrichedPayload).catch(() => null);
+  return null;
 }
 
 function safeEquals(left, right) {
@@ -1023,7 +1021,7 @@ function toApiErrorResponse(error) {
       body: {
         success: false,
         error: "request_error",
-        message: error?.message || "Erro de requisicao.",
+        message: error?.message || "Erro de requisição.",
       },
     };
   }
@@ -1033,7 +1031,7 @@ function toApiErrorResponse(error) {
     body: {
       success: false,
       error: "internal_error",
-      message: error?.message || "Erro interno nao identificado.",
+      message: error?.message || "Erro interno não identificado.",
     },
   };
 }
@@ -1169,7 +1167,7 @@ async function readJsonBody(req) {
   try {
     return JSON.parse(raw);
   } catch {
-    const error = new Error("Body JSON invalido.");
+    const error = new Error("Body JSON inválido.");
     error.statusCode = 400;
     throw error;
   }
@@ -1181,7 +1179,7 @@ function extractConversationIdFromExecuteInput(input) {
   return String(webhookBody?.conversation_id || webhookBody?.id || "").trim();
 }
 
-function enrichApiErrorWithN8nEvent(apiBody, fallback = {}) {
+async function enrichApiErrorWithN8nEvent(apiBody, fallback = {}) {
   if (!apiBody || typeof apiBody !== "object") {
     return;
   }
@@ -1199,7 +1197,7 @@ function enrichApiErrorWithN8nEvent(apiBody, fallback = {}) {
     return;
   }
 
-  const event = getLatestN8nErrorEvent({
+  const event = await getLatestN8nErrorEvent({
     requestId,
     client,
     conversationId,
@@ -1479,13 +1477,13 @@ function normalizeConversationMessagesForPreview(messagesResponse, options = {})
   });
 }
 
-function mapProfileAccounts(profile) {
+async function mapProfileAccounts(profile) {
   const accounts = Array.isArray(profile?.accounts) ? profile.accounts : [];
 
-  return accounts.map((account) => {
+  const mapped = await Promise.all(accounts.map(async (account) => {
     const accountId = Number(account?.id || 0);
     const accountName = account?.name || `Conta ${accountId}`;
-    const mapping = findWebhookMappingByAccountName(accountName);
+    const mapping = await findWebhookMappingByAccountName(accountName);
 
     return {
       account_id: accountId,
@@ -1494,10 +1492,12 @@ function mapProfileAccounts(profile) {
       webhook_configurado: Boolean(mapping),
       empresa_mapeada: mapping?.nome || null,
     };
-  });
+  }));
+
+  return mapped;
 }
 
-const server = createServer(async (req, res) => {
+export async function requestHandler(req, res) {
   const requestUrl = getRequestUrl(req);
   const pathname = requestUrl.pathname;
 
@@ -1528,7 +1528,7 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 500, {
         error: "login_unavailable",
-        message: "Nao foi possivel carregar public/pages/login.html",
+        message: "Não foi possível carregar public/pages/login.html",
       });
     }
   }
@@ -1630,7 +1630,7 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && pathname === "/api/auth/health") {
     const authSession = readAuthSessionFromRequest(req, config);
-    const auditStats = getAuthAuditStats();
+    const auditStats = await getAuthAuditStats();
     return json(res, 200, {
       success: true,
       auth_enabled: Boolean(config.authEnabled),
@@ -1670,7 +1670,7 @@ const server = createServer(async (req, res) => {
     const eventType = requestUrl.searchParams.get("event_type") || "";
     const outcome = requestUrl.searchParams.get("outcome") || "";
     const email = requestUrl.searchParams.get("email") || "";
-    const events = listAuthAuditEvents({
+    const events = await listAuthAuditEvents({
       limit,
       eventType,
       outcome,
@@ -1883,7 +1883,7 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 500, {
         error: "reprocessador_unavailable",
-        message: "Nao foi possivel carregar public/pages/reprocessador.html",
+        message: "Não foi possível carregar public/pages/reprocessador.html",
       });
     }
   }
@@ -1895,7 +1895,7 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 500, {
         error: "ajuda_unavailable",
-        message: "Nao foi possivel carregar public/pages/reprocessador.html",
+        message: "Não foi possível carregar public/pages/reprocessador.html",
       });
     }
   }
@@ -1907,7 +1907,7 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 500, {
         error: "configuracoes_unavailable",
-        message: "Nao foi possivel carregar public/pages/configuracoes.html",
+        message: "Não foi possível carregar public/pages/configuracoes.html",
       });
     }
   }
@@ -1920,7 +1920,8 @@ const server = createServer(async (req, res) => {
       });
       const profile = await client.getProfile();
 
-      return json(res, 200, { empresas: mapProfileAccounts(profile) });
+      const empresas = await mapProfileAccounts(profile);
+      return json(res, 200, { empresas });
     } catch (error) {
       return json(res, 500, {
         error: "empresas_unavailable",
@@ -1946,7 +1947,7 @@ const server = createServer(async (req, res) => {
 
       const accountId = Number(identity.accountId);
       const inboxId = Number(conversation?.inbox_id || 0);
-      const profileAccounts = mapProfileAccounts(profile);
+      const profileAccounts = await mapProfileAccounts(profile);
       const matchedAccount = profileAccounts.find((item) => item.account_id === accountId) || null;
 
       return json(res, 200, {
@@ -2121,7 +2122,7 @@ const server = createServer(async (req, res) => {
     try {
       return json(res, 200, {
         success: true,
-        clients: listReprocessClients(),
+        clients: await listReprocessClients(),
       });
     } catch (error) {
       return json(res, 500, {
@@ -2178,7 +2179,7 @@ const server = createServer(async (req, res) => {
       const clientFilter = String(requestUrl.searchParams.get("client") || "")
         .trim()
         .toLowerCase();
-      const allClients = listReprocessClients();
+      const allClients = await listReprocessClients();
       const targetClients = clientFilter
         ? allClients.filter((client) => String(client.key || "").toLowerCase() === clientFilter)
         : allClients;
@@ -2187,13 +2188,13 @@ const server = createServer(async (req, res) => {
         return json(res, 404, {
           success: false,
           error: "client_not_found",
-          message: `Cliente '${clientFilter}' nao encontrado.`,
+          message: `Cliente '${clientFilter}' não encontrado.`,
         });
       }
 
       const mappings = await Promise.all(
         targetClients.map(async (clientSummary) => {
-          const clientConfig = getReprocessClient(clientSummary.key);
+          const clientConfig = await getReprocessClient(clientSummary.key);
           if (!clientConfig) {
             return {
               client: clientSummary.key,
@@ -2260,7 +2261,7 @@ const server = createServer(async (req, res) => {
           conversationId,
         };
 
-        registerWebhookDispatchEvent({
+        await registerWebhookDispatchEvent({
           request_id: requestContext.requestId,
           client: requestContext.client,
           conversation_id: requestContext.conversationId,
@@ -2270,14 +2271,14 @@ const server = createServer(async (req, res) => {
         scheduleExecutionReconciliation({
           config,
           context: requestContext,
-          onEvent: (event) => {
-            registerN8nExecutionEvent(event);
+          onEvent: async (event) => {
+            await registerN8nExecutionEvent(event);
           },
-          onFailure: (error) => {
-            registerN8nStatusEvent({
+          onFailure: async (error) => {
+            await registerN8nStatusEvent({
               category: "n8n_execution_lookup_failed",
-              title: "Falha ao consultar execucao no n8n",
-              likely_cause: error?.message || "Falha nao identificada ao consultar API do n8n.",
+              title: "Falha ao consultar execução no n8n",
+              likely_cause: error?.message || "Falha não identificada ao consultar API do n8n.",
               suggestion: "Validar N8N_API_BASE_URL/N8N_API_KEY e disponibilidade da API do n8n.",
               request_id: requestContext.requestId,
               client: requestContext.client,
@@ -2290,7 +2291,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, result);
     } catch (error) {
       const formatted = toApiErrorResponse(error);
-      enrichApiErrorWithN8nEvent(formatted.body, {
+      await enrichApiErrorWithN8nEvent(formatted.body, {
         requestId: String(formatted.body?.details?.request_id || "").trim(),
         client: String(formatted.body?.details?.client || input?.client || "")
           .trim()
@@ -2330,7 +2331,7 @@ const server = createServer(async (req, res) => {
         hintedClient && input && typeof input === "object" && !Array.isArray(input)
           ? { ...input, client: input.client || hintedClient }
           : input;
-      const event = registerN8nErrorEvent(normalizedInput);
+      const event = await registerN8nErrorEvent(normalizedInput);
 
       return json(res, 200, {
         success: true,
@@ -2341,7 +2342,7 @@ const server = createServer(async (req, res) => {
       return json(res, 400, {
         success: false,
         error: "invalid_n8n_callback_payload",
-        message: error?.message || "Payload invalido para callback de erro n8n.",
+        message: error?.message || "Payload inválido para callback de erro n8n.",
       });
     }
   }
@@ -2350,7 +2351,7 @@ const server = createServer(async (req, res) => {
     const client = requestUrl.searchParams.get("client") || "";
     const requestId = requestUrl.searchParams.get("request_id") || "";
     const conversationId = requestUrl.searchParams.get("conversation_id") || "";
-    const event = getLatestN8nErrorEvent({
+    const event = await getLatestN8nErrorEvent({
       client,
       requestId,
       conversationId,
@@ -2381,7 +2382,7 @@ const server = createServer(async (req, res) => {
         hintedClient && input && typeof input === "object" && !Array.isArray(input)
           ? { ...input, client: input.client || hintedClient }
           : input;
-      const event = registerN8nStatusEvent(normalizedInput);
+      const event = await registerN8nStatusEvent(normalizedInput);
 
       return json(res, 200, {
         success: true,
@@ -2392,7 +2393,7 @@ const server = createServer(async (req, res) => {
       return json(res, 400, {
         success: false,
         error: "invalid_n8n_callback_payload",
-        message: error?.message || "Payload invalido para callback de status n8n.",
+        message: error?.message || "Payload inválido para callback de status n8n.",
       });
     }
   }
@@ -2401,7 +2402,7 @@ const server = createServer(async (req, res) => {
     const client = requestUrl.searchParams.get("client") || "";
     const requestId = requestUrl.searchParams.get("request_id") || "";
     const conversationId = requestUrl.searchParams.get("conversation_id") || "";
-    const event = getLatestN8nStatusEvent({
+    const event = await getLatestN8nStatusEvent({
       client,
       requestId,
       conversationId,
@@ -2421,10 +2422,10 @@ const server = createServer(async (req, res) => {
     }
 
     try {
-      const result = readCompaniesConfig();
+      const result = await readCompaniesConfig();
       return json(res, 200, {
         success: true,
-        file_path: result.file_path,
+        storage: result.storage,
         total: result.empresas.length,
         empresas: result.empresas,
       });
@@ -2432,7 +2433,7 @@ const server = createServer(async (req, res) => {
       return json(res, 500, {
         success: false,
         error: "companies_read_failed",
-        message: error?.message || "Falha ao ler empresas.json.",
+        message: error?.message || "Falha ao ler configuração de empresas.",
       });
     }
   }
@@ -2445,11 +2446,11 @@ const server = createServer(async (req, res) => {
 
     try {
       const input = await readJsonBody(req);
-      const result = writeCompaniesConfig(input);
+      const result = await writeCompaniesConfig(input);
       return json(res, 200, {
         success: true,
         message: "Empresas salvas com sucesso.",
-        file_path: result.file_path,
+        storage: result.storage,
         total: result.total,
         empresas: result.empresas,
       });
@@ -2457,7 +2458,7 @@ const server = createServer(async (req, res) => {
       return json(res, 400, {
         success: false,
         error: "companies_write_failed",
-        message: error?.message || "Falha ao salvar empresas.json.",
+        message: error?.message || "Falha ao salvar configuração de empresas.",
       });
     }
   }
@@ -2490,7 +2491,7 @@ const server = createServer(async (req, res) => {
     const conversationId = requestUrl.searchParams.get("conversation_id") || "";
     const sync = String(requestUrl.searchParams.get("sync") || "").toLowerCase() === "true";
 
-    let event = getLatestN8nExecutionEvent({
+    let event = await getLatestN8nExecutionEvent({
       client,
       requestId,
       conversationId,
@@ -2510,12 +2511,12 @@ const server = createServer(async (req, res) => {
         });
 
         if (reconciled.ok && reconciled.event) {
-          event = registerN8nExecutionEvent(reconciled.event);
+          event = await registerN8nExecutionEvent(reconciled.event);
         } else if (!event) {
-          registerN8nStatusEvent({
+          await registerN8nStatusEvent({
             category: "n8n_execution_not_found",
-            title: "Execucao ainda nao localizada no n8n",
-            likely_cause: "A execucao pode ainda nao ter sido indexada na API do n8n.",
+            title: "Execução ainda não localizada no n8n",
+            likely_cause: "A execução pode ainda não ter sido indexada na API do n8n.",
             suggestion: "Tentar novamente em alguns segundos.",
             request_id: requestId || null,
             client: client || null,
@@ -2523,10 +2524,10 @@ const server = createServer(async (req, res) => {
           });
         }
       } catch (error) {
-        registerN8nStatusEvent({
+        await registerN8nStatusEvent({
           category: "n8n_execution_lookup_failed",
-          title: "Falha ao consultar execucao no n8n",
-          likely_cause: error?.message || "Falha nao identificada ao consultar API do n8n.",
+          title: "Falha ao consultar execução no n8n",
+          likely_cause: error?.message || "Falha não identificada ao consultar API do n8n.",
           suggestion: "Validar variaveis de ambiente da API do n8n e tentar novamente.",
           request_id: requestId || null,
           client: client || null,
@@ -2552,7 +2553,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/api/reprocess/n8n/events") {
     const client = requestUrl.searchParams.get("client") || "";
     const limit = Number(requestUrl.searchParams.get("limit") || 20);
-    const events = listRecentN8nEvents({
+    const events = await listRecentN8nEvents({
       client,
       limit,
     });
@@ -2582,9 +2583,14 @@ const server = createServer(async (req, res) => {
       message:
       "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/health, GET /api/auth/audit, GET /api/auth/session, POST /api/auth/login, POST /api/auth/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
-});
+}
 
-server.listen(config.port, () => {
-  console.log(`Chatwoot Reprocess Helper online em http://localhost:${config.port}`);
-});
+const isVercelRuntime = Boolean(process.env.VERCEL) || Boolean(process.env.NOW_REGION);
+
+if (!isVercelRuntime) {
+  const server = createServer(requestHandler);
+  server.listen(config.port, () => {
+    console.log(`Chatwoot Reprocess Helper online em http://localhost:${config.port}`);
+  });
+}
 

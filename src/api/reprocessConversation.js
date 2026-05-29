@@ -34,7 +34,7 @@ export async function reprocessConversation({ input, config }) {
 
   const account = getAccountFromProfile(profile, accountIdFromLink);
   const accountName = account?.name || `Conta ${accountIdFromLink}`;
-  const webhookConfig = resolveWebhookConfigByAccountName(accountName);
+  const webhookConfig = await resolveWebhookConfigByAccountName(accountName);
 
   const context = {
     accountId: Number(identity.accountId),
