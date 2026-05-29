@@ -8,6 +8,7 @@ const confirmOk = document.getElementById("confirmModalOk");
 const confirmCancel = document.getElementById("confirmModalCancel");
 
 let resolver = null;
+let csrfToken = "";
 
 function safeText(value, fallback) {
   const text = String(value == null ? "" : value).trim();
@@ -53,15 +54,16 @@ function openConfirmModal(message) {
 
 async function enforceClientSession() {
   try {
-    const response = await fetch("/api/auth/temp/session", {
+    const response = await fetch("/api/auth/session", {
       method: "GET",
       headers: { "Cache-Control": "no-store" },
     });
     const data = await readJsonSafe(response);
+    csrfToken = safeText(data && data.csrf_token, csrfToken);
     if (!response.ok || !data?.success) {
       return;
     }
-    if (data.temp_auth_enabled && !data.authenticated) {
+    if (data.auth_enabled && !data.authenticated) {
       const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       window.location.replace(`/login?next=${encodeURIComponent(next)}`);
     }
@@ -75,10 +77,16 @@ async function logout() {
   if (!confirmed) {
     return;
   }
+  if (!csrfToken) {
+    await enforceClientSession();
+  }
   try {
-    await fetch("/api/auth/temp/logout", {
+    await fetch("/api/auth/logout", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
       body: "{}",
     });
   } catch {

@@ -408,7 +408,7 @@
                   <ul>
                     <li><strong>Nome</strong> — identificação interna (ex: AKILA, BOTTA).</li>
                     <li><strong>Webhook</strong> — URL completa do fluxo n8n para esta empresa.</li>
-                    <li><strong>Tabela de pausa</strong> — selecione a tabela do Supabase que contém os registros de pausa de IA.</li>
+                    <li><strong>Tabela de pausa</strong> — use tabelas com prefixo <code>REPROCESSAMENTO - </code> para manter o ambiente organizado.</li>
                   </ul>
                   <p>Após preencher, clique em <strong>Salvar empresas.json</strong>. As alterações são aplicadas no backend imediatamente.</p>
                 </div>
@@ -534,7 +534,7 @@
               </div>
               <div class="field" style="flex:2">
                 <label>Filtrar pelo nome</label>
-                <input id="tableFilterInput" type="text" placeholder="Ex: AKILA, pausar, empresas...">
+                <input id="tableFilterInput" type="text" placeholder="Ex: REPROCESSAMENTO -, ASTRO, pausar...">
               </div>
               <div class="field" style="flex:1">
                 <label>Vincular à empresa</label>

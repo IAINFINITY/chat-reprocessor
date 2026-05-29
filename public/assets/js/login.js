@@ -19,6 +19,7 @@ var togglePasswordBtn = document.getElementById("togglePasswordBtn");
 var passwordEyeIcon = document.getElementById("passwordEyeIcon");
 var loginBtnDefaultText = loginBtn ? loginBtn.textContent : "Entrar";
 var MIN_AUTH_LOADING_MS = 900;
+var csrfToken = "";
 
 function getStorage(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -99,11 +100,12 @@ async function readJsonSafe(response) {
 
 async function checkExistingSession() {
   try {
-    var response = await fetch("/api/auth/temp/session", {
+    var response = await fetch("/api/auth/session", {
       method: "GET",
       headers: { "Cache-Control": "no-store" },
     });
     var data = await readJsonSafe(response);
+    csrfToken = safeText(data && data.csrf_token, csrfToken);
     if (response.ok && data && data.success && data.authenticated) {
       window.location.replace(readNextUrl());
       return true;
@@ -148,13 +150,20 @@ async function doLogin(event) {
     loginPassword.classList.remove("is-error");
   }
 
+  if (!csrfToken) {
+    await checkExistingSession();
+  }
+
   var startedAt = Date.now();
   var keepLoadingUntilRedirect = false;
   setLoading(true);
   try {
-    var response = await fetch("/api/auth/temp/login", {
+    var response = await fetch("/api/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+      },
       body: JSON.stringify({ username: username, password: password }),
     });
 
