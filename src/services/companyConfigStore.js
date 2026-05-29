@@ -1,11 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { prisma } from "../clients/prismaClient.js";
 
-const DEFAULT_FILE_NAME = "empresas.json";
 const DEFAULT_SUPABASE_TABLE_PREFIX = "REPROCESSAMENTO - ";
 
-function getCompaniesFilePath() {
-  return path.resolve(process.cwd(), DEFAULT_FILE_NAME);
+function normalizeName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeRow(input = {}) {
@@ -16,17 +19,22 @@ function normalizeRow(input = {}) {
         .split(",")
         .map((item) => item.trim())
         .filter(Boolean);
-  const normalizedAccountIds = [...new Set(
-    parsedAccountIds
-      .map((item) => Number(item))
-      .filter((item) => Number.isInteger(item) && item > 0),
-  )];
+  const normalizedAccountIds = [
+    ...new Set(
+      parsedAccountIds
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item > 0),
+    ),
+  ];
 
+  const nome = String(input?.nome || "").trim();
   return {
-    nome: String(input?.nome || "").trim(),
+    nome,
+    nome_normalizado: normalizeName(nome),
     url_webhook: String(input?.url_webhook || "").trim(),
     tabela: String(input?.tabela || input?.pause_table || "").trim(),
     chatwoot_account_ids: normalizedAccountIds,
+    ativo: input?.ativo === undefined ? true : Boolean(input?.ativo),
   };
 }
 
@@ -44,16 +52,9 @@ function hasManagedPrefix(tableName, prefix) {
   return safeTable.startsWith(safePrefix);
 }
 
-function parseCompaniesFile(rawText) {
-  let parsed = {};
-  try {
-    parsed = JSON.parse(String(rawText || "").replace(/^\uFEFF/, ""));
-  } catch {
-    throw new Error("Arquivo empresas.json invalido. Verifique o formato JSON.");
-  }
-
-  const empresas = Array.isArray(parsed?.empresas) ? parsed.empresas : [];
-  return empresas.map(normalizeRow);
+function shouldEnforceManagedPrefix() {
+  const raw = String(process.env.REPROCESS_ENFORCE_MANAGED_PREFIX || "false").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes" || raw === "sim";
 }
 
 function validateCompaniesRows(rows) {
@@ -62,12 +63,13 @@ function validateCompaniesRows(rows) {
   }
 
   if (rows.length > 500) {
-    throw new Error("Limite excedido. Maximo de 500 empresas por arquivo.");
+    throw new Error("Limite excedido. Maximo de 500 empresas por operacao.");
   }
 
   const duplicatedNames = new Set();
   const nameSet = new Set();
   const managedPrefix = getManagedTablePrefix();
+  const enforcePrefix = shouldEnforceManagedPrefix();
 
   rows.forEach((row, index) => {
     const line = index + 1;
@@ -77,11 +79,11 @@ function validateCompaniesRows(rows) {
     const accountIds = Array.isArray(row?.chatwoot_account_ids) ? row.chatwoot_account_ids : [];
 
     if (!nome) {
-      throw new Error(`Empresa #${line}: campo 'nome' obrigatorio.`);
+      throw new Error(`Empresa #${line}: campo 'nome' obrigatório.`);
     }
 
     if (!webhook) {
-      throw new Error(`Empresa '${nome}': campo 'url_webhook' obrigatorio.`);
+      throw new Error(`Empresa '${nome}': campo 'url_webhook' obrigatório.`);
     }
 
     try {
@@ -94,10 +96,10 @@ function validateCompaniesRows(rows) {
     }
 
     if (!tabela) {
-      throw new Error(`Empresa '${nome}': campo 'tabela' obrigatorio.`);
+      throw new Error(`Empresa '${nome}': campo 'tabela' obrigatório.`);
     }
 
-    if (!hasManagedPrefix(tabela, managedPrefix)) {
+    if (enforcePrefix && !hasManagedPrefix(tabela, managedPrefix)) {
       throw new Error(
         `Empresa '${nome}': tabela deve iniciar com '${managedPrefix}' (ex: '${managedPrefix}${nome.toLowerCase().replace(/\s+/g, "_")}').`,
       );
@@ -110,7 +112,7 @@ function validateCompaniesRows(rows) {
       }
     }
 
-    const normalizedName = nome.toLowerCase();
+    const normalizedName = normalizeName(nome);
     if (nameSet.has(normalizedName)) {
       duplicatedNames.add(nome);
     }
@@ -118,46 +120,83 @@ function validateCompaniesRows(rows) {
   });
 
   if (duplicatedNames.size > 0) {
-    throw new Error(
-      `Nomes de empresas duplicados: ${[...duplicatedNames].join(", ")}.`,
-    );
+    throw new Error(`Nomes de empresas duplicados: ${[...duplicatedNames].join(", ")}.`);
   }
 }
 
-export function readCompaniesConfig() {
-  const filePath = getCompaniesFilePath();
-
-  if (!existsSync(filePath)) {
-    return {
-      file_path: filePath,
-      empresas: [],
-    };
-  }
-
-  const content = readFileSync(filePath, "utf8");
-  const empresas = parseCompaniesFile(content);
-
+function mapCompanyRecord(record) {
+  const rawIds = Array.isArray(record?.chatwootAccountIds)
+    ? record.chatwootAccountIds
+    : [];
+  const ids = [
+    ...new Set(
+      rawIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    ),
+  ];
   return {
-    file_path: filePath,
-    empresas,
+    nome: String(record?.nome || "").trim(),
+    url_webhook: String(record?.urlWebhook || "").trim(),
+    tabela: String(record?.tabela || "").trim(),
+    chatwoot_account_ids: ids,
+    ativo: Boolean(record?.ativo),
   };
 }
 
-export function writeCompaniesConfig(input = {}) {
-  const filePath = getCompaniesFilePath();
-  const empresas = Array.isArray(input?.empresas) ? input.empresas.map(normalizeRow) : [];
+export async function readCompaniesConfig({ includeInactive = false } = {}) {
+  const where = includeInactive ? {} : { ativo: true };
+  const companies = await prisma.reprocessCompany.findMany({
+    where,
+    orderBy: { nomeNormalizado: "asc" },
+  });
 
+  return {
+    storage: "database",
+    empresas: companies.map(mapCompanyRecord),
+  };
+}
+
+export async function writeCompaniesConfig(input = {}) {
+  const empresas = Array.isArray(input?.empresas) ? input.empresas.map(normalizeRow) : [];
   validateCompaniesRows(empresas);
 
-  const payload = {
-    empresas,
-  };
+  await prisma.$transaction(async (tx) => {
+    await tx.reprocessCompany.updateMany({
+      data: { ativo: false },
+    });
 
-  writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    for (const empresa of empresas) {
+      await tx.reprocessCompany.upsert({
+        where: { nomeNormalizado: empresa.nome_normalizado },
+        create: {
+          nome: empresa.nome,
+          nomeNormalizado: empresa.nome_normalizado,
+          urlWebhook: empresa.url_webhook,
+          tabela: empresa.tabela,
+          chatwootAccountIds: empresa.chatwoot_account_ids,
+          ativo: true,
+        },
+        update: {
+          nome: empresa.nome,
+          urlWebhook: empresa.url_webhook,
+          tabela: empresa.tabela,
+          chatwootAccountIds: empresa.chatwoot_account_ids,
+          ativo: true,
+        },
+      });
+    }
+  });
 
   return {
-    file_path: filePath,
+    storage: "database",
     total: empresas.length,
-    empresas,
+    empresas: empresas.map((item) => ({
+      nome: item.nome,
+      url_webhook: item.url_webhook,
+      tabela: item.tabela,
+      chatwoot_account_ids: item.chatwoot_account_ids,
+      ativo: true,
+    })),
   };
 }

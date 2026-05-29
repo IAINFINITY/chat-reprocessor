@@ -1,4 +1,4 @@
-﻿import { listWebhookMappings } from "./webhookResolver.js";
+import { listWebhookMappings } from "./webhookResolver.js";
 
 const DEFAULT_SOURCE = "manual_reprocess";
 const DEFAULT_SECRET_HEADER = "x-reprocess-secret";
@@ -188,14 +188,14 @@ const payloadBuilders = {
   default: buildDefaultPayload,
 };
 
-function getClientsRegistry(env = process.env) {
+async function getClientsRegistry(env = process.env) {
   const globalTimeoutMs = parseGlobalTimeoutMs(env);
   const globalRetryCount = parseGlobalRetryCount(env);
   const defaultPauseSchema = parsePauseDefaultSchema(env);
   const defaultPauseLookupColumns = parsePauseDefaultLookupColumns(env);
   const defaultPauseAutoDetect = parsePauseAutoDetectDefault(env);
   const defaultPauseSuffix = parsePauseSuffixDefault(env);
-  const mappings = listWebhookMappings();
+  const mappings = await listWebhookMappings();
   const clients = {};
 
   for (const mapping of mappings) {
@@ -235,7 +235,7 @@ function getClientsRegistry(env = process.env) {
       retryCount: parsePositiveInteger(env[`${envPrefix}RETRY_COUNT`], globalRetryCount),
       chatwootAccountIds: mergedAccountIds,
       pauseTable: String(mapping.pauseTable || env[`${envPrefix}PAUSE_TABLE`] || "").trim(),
-      pauseTableSource: String(mapping.pauseTable || "").trim() ? "json" : "env",
+      pauseTableSource: String(mapping.pauseTable || "").trim() ? "database" : "env",
       pauseSchema: String(env[`${envPrefix}PAUSE_SCHEMA`] || defaultPauseSchema).trim(),
       pausePhoneColumn: legacyPausePhoneColumn || pauseLookupColumns[0] || "telefone",
       pauseLookupColumns,
@@ -257,8 +257,9 @@ function getClientsRegistry(env = process.env) {
   return clients;
 }
 
-export function listReprocessClients() {
-  return Object.values(getClientsRegistry()).map((client) => ({
+export async function listReprocessClients() {
+  const registry = await getClientsRegistry();
+  return Object.values(registry).map((client) => ({
     key: client.key,
     name: client.name,
     webhook_url: client.webhookUrl,
@@ -268,35 +269,36 @@ export function listReprocessClients() {
   }));
 }
 
-export function getReprocessClient(clientKey) {
+export async function getReprocessClient(clientKey) {
   const normalized = resolveClientKeyAlias(clientKey);
   if (!normalized) {
     return null;
   }
 
-  const clients = getClientsRegistry();
+  const clients = await getClientsRegistry();
   return clients[normalized] || null;
 }
 
-export function detectReprocessClientByAccountId(accountId) {
+export async function detectReprocessClientByAccountId(accountId) {
   const numericAccountId = Number(accountId || 0);
   if (!Number.isInteger(numericAccountId) || numericAccountId <= 0) {
     return null;
   }
 
   return (
-    Object.values(getClientsRegistry()).find((client) => client.chatwootAccountIds.includes(numericAccountId)) ||
-    null
+    Object.values(await getClientsRegistry()).find((client) =>
+      client.chatwootAccountIds.includes(numericAccountId),
+    ) || null
   );
 }
 
-export function detectReprocessClientByAccountName(accountName) {
+export async function detectReprocessClientByAccountName(accountName) {
   const normalizedName = normalizeClientName(accountName);
   if (!normalizedName) {
     return null;
   }
 
-  const clients = Object.values(getClientsRegistry());
+  const clients = Object.values(await getClientsRegistry());
 
   const exact = clients.find(
     (client) => normalizeClientName(client.name) === normalizedName,

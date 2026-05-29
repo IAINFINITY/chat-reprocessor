@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
+import { readCompaniesConfig } from "../services/companyConfigStore.js";
 
 const HEADER_TEMPLATE = {
   host: "webhooks-n8n.iainfinity.app",
@@ -42,25 +41,11 @@ function normalizeName(value) {
     .toLowerCase();
 }
 
-function readWebhooksJsonFile() {
-  const filePath = path.resolve(process.cwd(), "empresas.json");
-
-  if (!existsSync(filePath)) {
-    throw new Error("Arquivo empresas.json nao encontrado na raiz do projeto.");
-  }
-
-  let parsed;
-  try {
-    const content = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error("Arquivo empresas.json invalido. Verifique o formato JSON.");
-  }
-
-  const empresas = Array.isArray(parsed?.empresas) ? parsed.empresas : [];
+function normalizeMappings(empresas) {
+  const source = Array.isArray(empresas) ? empresas : [];
   const mappings = [];
 
-  for (const empresa of empresas) {
+  for (const empresa of source) {
     const nome = String(empresa?.nome || "").trim();
     const webhookUrl = String(empresa?.url_webhook || "").trim();
     const pauseTable = String(
@@ -98,8 +83,9 @@ function readWebhooksJsonFile() {
   return mappings;
 }
 
-export function listWebhookMappings() {
-  return readWebhooksJsonFile().map((item) => ({
+export async function listWebhookMappings() {
+  const config = await readCompaniesConfig();
+  return normalizeMappings(config.empresas).map((item) => ({
     nome: item.nome,
     webhookUrl: item.webhookUrl,
     pauseTable: item.pauseTable || "",
@@ -107,22 +93,23 @@ export function listWebhookMappings() {
   }));
 }
 
-export function findWebhookMappingByAccountName(accountName) {
+export async function findWebhookMappingByAccountName(accountName) {
   const normalized = normalizeName(accountName);
   if (!normalized) {
     return null;
   }
 
-  const mappings = readWebhooksJsonFile();
+  const config = await readCompaniesConfig();
+  const mappings = normalizeMappings(config.empresas);
   return mappings.find((item) => item.nome_normalizado === normalized) || null;
 }
 
-export function resolveWebhookConfigByAccountName(accountName) {
-  const found = findWebhookMappingByAccountName(accountName);
+export async function resolveWebhookConfigByAccountName(accountName) {
+  const found = await findWebhookMappingByAccountName(accountName);
 
   if (!found) {
     throw new Error(
-      `Nao existe webhook mapeado para a conta '${accountName}' no arquivo empresas.json.`,
+      `Não existe webhook mapeado para a conta '${accountName}' na configuração de empresas.`,
     );
   }
 

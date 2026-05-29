@@ -162,3 +162,18 @@ model QueueItem {
   @@index([client, enqueuedAt], map: "idx_reprocess_queue_items_client_enqueued_at")
   @@map("REPROCESSAMENTO - queue_items")
 }
+
+model ReprocessCompany {
+  id                 String   @id @default(cuid())
+  nome               String
+  nomeNormalizado    String   @unique @map("nome_normalizado")
+  urlWebhook         String   @map("url_webhook")
+  tabela             String
+  chatwootAccountIds Json     @default("[]") @map("chatwoot_account_ids")
+  ativo              Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@index([ativo, nomeNormalizado], map: "idx_reprocess_companies_ativo_nome_normalizado")
+  @@map("REPROCESSAMENTO - companies")
+}

@@ -1,9 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { prisma } from "../clients/prismaClient.js";
 
 let MAX_EVENTS = 500;
-let storeFilePath = path.resolve(process.cwd(), "data", "n8n-events.json");
-let events = [];
 const DEDUPE_WINDOW_MS = 20 * 60 * 1000;
 
 function toLower(value) {
@@ -46,101 +43,6 @@ function isRecentEvent(event, maxAgeMs) {
   }
 
   return Date.now() - ts <= maxAgeMs;
-}
-
-function ensureStoreDirectoryExists(filePath) {
-  const dirPath = path.dirname(filePath);
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
-  }
-}
-
-function parseStoreFile(rawText) {
-  try {
-    const parsed = JSON.parse(String(rawText || ""));
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-
-    if (Array.isArray(parsed?.events)) {
-      return parsed.events;
-    }
-
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-function persistEvents() {
-  ensureStoreDirectoryExists(storeFilePath);
-  writeFileSync(
-    storeFilePath,
-    JSON.stringify(
-      {
-        version: 1,
-        updated_at: new Date().toISOString(),
-        total: events.length,
-        events,
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-}
-
-function loadPersistedEvents() {
-  try {
-    if (!existsSync(storeFilePath)) {
-      events = [];
-      return;
-    }
-
-    const content = readFileSync(storeFilePath, "utf8");
-    const parsedEvents = parseStoreFile(content)
-      .filter((item) => item && typeof item === "object")
-      .slice(0, MAX_EVENTS);
-    events = parsedEvents;
-  } catch {
-    events = [];
-  }
-}
-
-function appendEvent(event) {
-  const dedupeKey = buildEventDedupeKey(event);
-  if (dedupeKey) {
-    const existingIndex = events.findIndex((item) => {
-      if (buildEventDedupeKey(item) !== dedupeKey) {
-        return false;
-      }
-      return isRecentEvent(item, DEDUPE_WINDOW_MS);
-    });
-
-    if (existingIndex >= 0) {
-      const existing = events[existingIndex];
-      const merged = {
-        ...existing,
-        ...event,
-        received_at: event?.received_at || new Date().toISOString(),
-        duplicate_count: Number(existing?.duplicate_count || 1) + 1,
-      };
-      events.splice(existingIndex, 1);
-      events.unshift(merged);
-      persistEvents();
-      return merged;
-    }
-  }
-
-  events.unshift({
-    ...event,
-    duplicate_count: Number(event?.duplicate_count || 1),
-  });
-  if (events.length > MAX_EVENTS) {
-    events.length = MAX_EVENTS;
-  }
-  persistEvents();
-  return events[0];
 }
 
 function stableEventText(value) {
@@ -217,7 +119,7 @@ function parseN8nErrorPayload(input) {
   if (combined.includes("insufficient_quota") || combined.includes("invalid_api_key")) {
     category = "openai_auth_or_quota";
     title = "OpenAI sem token/credito";
-    likelyCause = "O no remoto reportou erro de autenticacao/quota da OpenAI.";
+    likelyCause = "O nó remoto reportou erro de autenticação/quota da OpenAI.";
     suggestion = "Conferir token e faturamento da OpenAI no ambiente do fluxo.";
   } else if (combined.includes("variable") && combined.includes("not found")) {
     category = "workflow_variable_not_found";
@@ -299,7 +201,7 @@ function parseN8nStatusPayload(input) {
 }
 
 function normalizeExecutionPayload(event) {
-  const normalized = {
+  return {
     event_type: "execution",
     received_at: new Date().toISOString(),
     category: String(event?.category || "n8n_execution_status").trim(),
@@ -322,8 +224,6 @@ function normalizeExecutionPayload(event) {
     nodes_executed: Number(event?.nodes_executed || 0) || 0,
     source: event?.source || "n8n_api_poll",
   };
-
-  return normalized;
 }
 
 function buildDispatchStatusEvent(input) {
@@ -349,169 +249,268 @@ function buildDispatchStatusEvent(input) {
   };
 }
 
-export function configureN8nEventStore({
-  filePath,
-  maxEvents,
-} = {}) {
-  if (filePath) {
-    storeFilePath = path.resolve(process.cwd(), String(filePath));
+function toPrismaEventType(value) {
+  const safe = String(value || "").trim().toLowerCase();
+  if (safe === "error") {
+    return "error";
+  }
+  if (safe === "status") {
+    return "status";
+  }
+  return "execution";
+}
+
+function mapToPrismaData(event) {
+  return {
+    eventType: toPrismaEventType(event.event_type),
+    category: String(event.category || "").trim() || "n8n_event",
+    title: String(event.title || "").trim() || "Evento n8n",
+    likelyCause: event.likely_cause || null,
+    suggestion: event.suggestion || null,
+    workflowName: event.workflow_name || null,
+    workflowId: event.workflow_id || null,
+    executionId: event.execution_id || null,
+    executionUrl: event.execution_url || null,
+    failedNode: event.failed_node || null,
+    requestId: event.request_id || null,
+    conversationId: event.conversation_id ? String(event.conversation_id) : null,
+    client: event.client ? normalizeClientAlias(event.client) : null,
+    status: event.status || null,
+    nodesExecuted: Number(event.nodes_executed || 0) || 0,
+    n8nHttpCode: event.n8n_http_code ? String(event.n8n_http_code) : null,
+    errorMessage: event.error_message || null,
+    errorDescription: event.error_description || null,
+    upstreamMessages: Array.isArray(event.upstream_messages) ? event.upstream_messages : [],
+    source: event.source || null,
+    receivedAt: new Date(event.received_at || Date.now()),
+  };
+}
+
+function mapFromPrismaRow(row) {
+  return {
+    id: row.id,
+    event_type: row.eventType,
+    received_at: row.receivedAt ? row.receivedAt.toISOString() : new Date().toISOString(),
+    category: row.category,
+    title: row.title,
+    likely_cause: row.likelyCause,
+    suggestion: row.suggestion,
+    workflow_name: row.workflowName,
+    workflow_id: row.workflowId,
+    execution_id: row.executionId,
+    execution_url: row.executionUrl,
+    failed_node: row.failedNode,
+    request_id: row.requestId,
+    conversation_id: row.conversationId,
+    client: row.client,
+    status: row.status,
+    nodes_executed: row.nodesExecuted || 0,
+    n8n_http_code: row.n8nHttpCode,
+    error_message: row.errorMessage,
+    error_description: row.errorDescription,
+    upstream_messages: Array.isArray(row.upstreamMessages) ? row.upstreamMessages : [],
+    source: row.source,
+    duplicate_count: Number(row.duplicateCount || 1),
+  };
+}
+
+async function trimOldEvents() {
+  const rows = await prisma.n8nEvent.findMany({
+    orderBy: { receivedAt: "desc" },
+    select: { id: true },
+    skip: MAX_EVENTS,
+  });
+  if (rows.length > 0) {
+    await prisma.n8nEvent.deleteMany({
+      where: {
+        id: { in: rows.map((item) => item.id) },
+      },
+    });
+  }
+}
+
+async function findDedupeCandidate(event) {
+  const minDate = new Date(Date.now() - DEDUPE_WINDOW_MS);
+  const where = {
+    eventType: toPrismaEventType(event.event_type),
+    receivedAt: { gte: minDate },
+  };
+
+  if (event.request_id) {
+    where.requestId = String(event.request_id);
+  } else if (event.execution_id) {
+    where.executionId = String(event.execution_id);
+  } else if (event.conversation_id && event.client) {
+    where.conversationId = String(event.conversation_id);
+    where.client = normalizeClientAlias(event.client);
   }
 
+  const candidates = await prisma.n8nEvent.findMany({
+    where,
+    orderBy: { receivedAt: "desc" },
+    take: 100,
+  });
+
+  const targetKey = buildEventDedupeKey(event);
+  if (!targetKey) {
+    return null;
+  }
+
+  for (const candidate of candidates) {
+    const mapped = mapFromPrismaRow(candidate);
+    if (buildEventDedupeKey(mapped) === targetKey && isRecentEvent(mapped, DEDUPE_WINDOW_MS)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function appendEvent(event) {
+  const dedupeCandidate = await findDedupeCandidate(event);
+  if (dedupeCandidate) {
+    const updated = await prisma.n8nEvent.update({
+      where: { id: dedupeCandidate.id },
+      data: {
+        ...mapToPrismaData(event),
+        duplicateCount: Number(dedupeCandidate.duplicateCount || 1) + 1,
+      },
+    });
+    return mapFromPrismaRow(updated);
+  }
+
+  const created = await prisma.n8nEvent.create({
+    data: {
+      ...mapToPrismaData(event),
+      duplicateCount: Number(event?.duplicate_count || 1),
+    },
+  });
+  await trimOldEvents();
+  return mapFromPrismaRow(created);
+}
+
+export function configureN8nEventStore({ maxEvents } = {}) {
   const parsedMax = Number(maxEvents);
   if (Number.isInteger(parsedMax) && parsedMax > 0) {
     MAX_EVENTS = parsedMax;
   }
-
-  loadPersistedEvents();
 }
 
-export function registerN8nErrorEvent(rawPayload) {
+export async function registerN8nErrorEvent(rawPayload) {
   const parsed = parseN8nErrorPayload(rawPayload);
   return appendEvent(parsed);
 }
 
-export function registerN8nStatusEvent(rawPayload) {
+export async function registerN8nStatusEvent(rawPayload) {
   const parsed = parseN8nStatusPayload(rawPayload);
   return appendEvent(parsed);
 }
 
-export function registerN8nExecutionEvent(payload) {
+export async function registerN8nExecutionEvent(payload) {
   const parsed = normalizeExecutionPayload(payload);
   return appendEvent(parsed);
 }
 
-export function registerWebhookDispatchEvent(payload) {
+export async function registerWebhookDispatchEvent(payload) {
   const parsed = buildDispatchStatusEvent(payload || {});
   return appendEvent(parsed);
 }
 
-export function getLatestN8nErrorEvent({ client, conversationId, requestId } = {}) {
+export async function getLatestN8nErrorEvent({ client, conversationId, requestId } = {}) {
   const byClient = normalizeClientAlias(client);
   const byConversation = String(conversationId || "").trim();
   const byRequestId = String(requestId || "").trim();
   const maxAgeMs = 10 * 60 * 1000;
 
-  const strictMatch =
-    events.find((event) => {
-      if (String(event?.event_type || "") !== "error") {
-        return false;
-      }
-
-      if (byRequestId && String(event.request_id || "") !== byRequestId) {
-        return false;
-      }
-
-      if (byConversation && String(event.conversation_id || "") !== byConversation) {
-        return false;
-      }
-
-      if (!matchesClientFilter(event.client, byClient)) {
-        return false;
-      }
-
-      return true;
-    }) || null;
-
-  if (strictMatch) {
-    return strictMatch;
+  const strict = await prisma.n8nEvent.findFirst({
+    where: {
+      eventType: "error",
+      ...(byRequestId ? { requestId: byRequestId } : {}),
+      ...(byConversation ? { conversationId: byConversation } : {}),
+      ...(byClient ? { client: byClient } : {}),
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+  if (strict) {
+    return mapFromPrismaRow(strict);
   }
 
-  const clientFallback =
-    events.find((event) => {
-      if (String(event?.event_type || "") !== "error") {
-        return false;
-      }
-
-      if (!isRecentEvent(event, maxAgeMs)) {
-        return false;
-      }
-
-      if (!matchesClientFilter(event.client, byClient)) {
-        return false;
-      }
-
-      return true;
-    }) || null;
-
-  if (clientFallback) {
-    return clientFallback;
+  if (byClient) {
+    const fallback = await prisma.n8nEvent.findMany({
+      where: {
+        eventType: "error",
+        client: byClient,
+      },
+      orderBy: { receivedAt: "desc" },
+      take: 30,
+    });
+    const mapped = fallback.map(mapFromPrismaRow).find((item) => isRecentEvent(item, maxAgeMs)) || null;
+    if (mapped) {
+      return mapped;
+    }
   }
 
   if (!byClient && !byConversation && !byRequestId) {
-    return events.find((event) => String(event?.event_type || "") === "error") || null;
+    const lastError = await prisma.n8nEvent.findFirst({
+      where: { eventType: "error" },
+      orderBy: { receivedAt: "desc" },
+    });
+    return lastError ? mapFromPrismaRow(lastError) : null;
   }
 
   return null;
 }
 
-export function getLatestN8nStatusEvent({ client, conversationId, requestId } = {}) {
+export async function getLatestN8nStatusEvent({ client, conversationId, requestId } = {}) {
   const byClient = normalizeClientAlias(client);
   const byConversation = String(conversationId || "").trim();
   const byRequestId = String(requestId || "").trim();
 
-  return (
-    events.find((event) => {
-      if (String(event?.event_type || "") !== "status") {
-        return false;
-      }
-
-      if (byRequestId && String(event.request_id || "") !== byRequestId) {
-        return false;
-      }
-
-      if (byConversation && String(event.conversation_id || "") !== byConversation) {
-        return false;
-      }
-
-      if (!matchesClientFilter(event.client, byClient)) {
-        return false;
-      }
-
-      return true;
-    }) || null
-  );
+  const row = await prisma.n8nEvent.findFirst({
+    where: {
+      eventType: "status",
+      ...(byRequestId ? { requestId: byRequestId } : {}),
+      ...(byConversation ? { conversationId: byConversation } : {}),
+      ...(byClient ? { client: byClient } : {}),
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+  return row ? mapFromPrismaRow(row) : null;
 }
 
-export function getLatestN8nExecutionEvent({ client, conversationId, requestId } = {}) {
+export async function getLatestN8nExecutionEvent({ client, conversationId, requestId } = {}) {
   const byClient = normalizeClientAlias(client);
   const byConversation = String(conversationId || "").trim();
   const byRequestId = String(requestId || "").trim();
 
-  return (
-    events.find((event) => {
-      if (String(event?.event_type || "") !== "execution") {
-        return false;
-      }
-
-      if (byRequestId && String(event.request_id || "") !== byRequestId) {
-        return false;
-      }
-
-      if (byConversation && String(event.conversation_id || "") !== byConversation) {
-        return false;
-      }
-
-      if (!matchesClientFilter(event.client, byClient)) {
-        return false;
-      }
-
-      return true;
-    }) || null
-  );
+  const row = await prisma.n8nEvent.findFirst({
+    where: {
+      eventType: "execution",
+      ...(byRequestId ? { requestId: byRequestId } : {}),
+      ...(byConversation ? { conversationId: byConversation } : {}),
+      ...(byClient ? { client: byClient } : {}),
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+  return row ? mapFromPrismaRow(row) : null;
 }
 
-export function listRecentN8nEvents({ limit = 20, client } = {}) {
+export async function listRecentN8nEvents({ limit = 20, client } = {}) {
   const safeLimit = Math.max(1, Math.min(Number(limit || 20), 100));
   const byClient = normalizeClientAlias(client);
-  const source = byClient
-    ? events.filter((event) => matchesClientFilter(event.client, byClient))
-    : events;
+  const rows = await prisma.n8nEvent.findMany({
+    where: byClient ? { client: byClient } : {},
+    orderBy: { receivedAt: "desc" },
+    take: Math.max(safeLimit * 3, 120),
+  });
 
+  const source = rows.map(mapFromPrismaRow);
   const deduped = [];
   const seen = new Set();
 
   for (const event of source) {
-    const key = buildEventDedupeKey(event) || `${stableEventText(event?.event_type)}|${stableEventText(event?.category)}|${stableEventText(event?.received_at)}`;
+    const key =
+      buildEventDedupeKey(event) ||
+      `${stableEventText(event?.event_type)}|${stableEventText(event?.category)}|${stableEventText(event?.received_at)}`;
     if (seen.has(key)) {
       continue;
     }
@@ -524,5 +523,3 @@ export function listRecentN8nEvents({ limit = 20, client } = {}) {
 
   return deduped;
 }
-
-configureN8nEventStore();
