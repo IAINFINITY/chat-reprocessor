@@ -3741,7 +3741,6 @@ onEl("n8nLookupBtn", "click", function () {
   });
 })();
 
-/* ── Sidebar toggle & page navigation ── */
 (function() {
   var sidebar = document.getElementById('sidebar');
   var toggleBtn = document.getElementById('sidebarToggle');
@@ -3915,7 +3914,6 @@ onEl("n8nLookupBtn", "click", function () {
     navigateTo("reprocessador");
   }
 
-  /* ── FAQ accordion ── */
   document.querySelectorAll('.faq-question').forEach(function(q){
     q.addEventListener('click',function(){
       var expanded=this.getAttribute('aria-expanded')==='true';
@@ -3943,7 +3941,6 @@ onEl("n8nLookupBtn", "click", function () {
   });
 })();
 
-/* ── Ripple effect on primary buttons ── */
 (function() {
   document.querySelectorAll('.btn-primary').forEach(function(btn) {
     btn.addEventListener('pointermove', function(e) {
@@ -3954,7 +3951,6 @@ onEl("n8nLookupBtn", "click", function () {
   });
 })();
 
-/* ── Confetti helper ── */
 function fireConfetti(count) {
   count = count || 30;
   var colors = ['var(--accent)', 'var(--success)', 'var(--error)', 'var(--warning)'];

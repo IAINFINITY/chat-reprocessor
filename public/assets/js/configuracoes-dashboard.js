@@ -303,7 +303,7 @@ async function saveCompanies() {
     return;
   }
   try {
-    setSaveFeedback("Salvando empresas.json...", "");
+    setSaveFeedback("Salvando configuracao de empresas...", "");
     var payload = {
       empresas: collectCompaniesFromUi(),
     };
@@ -319,8 +319,8 @@ async function saveCompanies() {
     }
     state.companies = Array.isArray(data.empresas) ? data.empresas : [];
     renderCompanies();
-    setStatus("empresas.json salvo com sucesso.", false);
-    setSaveFeedback("Arquivo salvo com sucesso.", "success");
+    setStatus("Configuracao de empresas salva com sucesso.", false);
+    setSaveFeedback("Configuracao salva com sucesso.", "success");
   } catch (error) {
     setStatus("Erro ao salvar: " + safeText(error && error.message, "erro"), true);
     setSaveFeedback("Falha ao salvar: " + safeText(error && error.message, "erro"), "error");
@@ -437,7 +437,7 @@ function applySelectedTable(tableName) {
     state.companies[index].tabela = tableName;
   }
   setStatus("Tabela aplicada na empresa selecionada.", false);
-  setSaveFeedback("Tabela aplicada. Clique em 'Salvar empresas.json' para persistir.", "");
+  setSaveFeedback("Tabela aplicada. Clique em 'Salvar configuracao' para persistir.", "");
 }
 
 onEl("addCompanyBtn", "click", async function () {
