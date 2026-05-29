@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const DEFAULT_FILE_NAME = "empresas.json";
+const DEFAULT_SUPABASE_TABLE_PREFIX = "REPROCESSAMENTO - ";
 
 function getCompaniesFilePath() {
   return path.resolve(process.cwd(), DEFAULT_FILE_NAME);
@@ -29,6 +30,20 @@ function normalizeRow(input = {}) {
   };
 }
 
+function getManagedTablePrefix() {
+  const raw = String(process.env.SUPABASE_MANAGED_TABLE_PREFIX || DEFAULT_SUPABASE_TABLE_PREFIX).trim();
+  return raw || DEFAULT_SUPABASE_TABLE_PREFIX;
+}
+
+function hasManagedPrefix(tableName, prefix) {
+  const safeTable = String(tableName || "").trim().toLowerCase();
+  const safePrefix = String(prefix || "").trim().toLowerCase();
+  if (!safeTable || !safePrefix) {
+    return false;
+  }
+  return safeTable.startsWith(safePrefix);
+}
+
 function parseCompaniesFile(rawText) {
   let parsed = {};
   try {
@@ -52,6 +67,7 @@ function validateCompaniesRows(rows) {
 
   const duplicatedNames = new Set();
   const nameSet = new Set();
+  const managedPrefix = getManagedTablePrefix();
 
   rows.forEach((row, index) => {
     const line = index + 1;
@@ -79,6 +95,12 @@ function validateCompaniesRows(rows) {
 
     if (!tabela) {
       throw new Error(`Empresa '${nome}': campo 'tabela' obrigatorio.`);
+    }
+
+    if (!hasManagedPrefix(tabela, managedPrefix)) {
+      throw new Error(
+        `Empresa '${nome}': tabela deve iniciar com '${managedPrefix}' (ex: '${managedPrefix}${nome.toLowerCase().replace(/\s+/g, "_")}').`,
+      );
     }
 
     for (const accountId of accountIds) {

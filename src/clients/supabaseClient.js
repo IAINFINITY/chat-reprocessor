@@ -46,6 +46,19 @@ function normalizeName(value) {
     .trim();
 }
 
+function normalizePrefix(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function hasManagedPrefix(tableName, prefix) {
+  const normalizedTable = String(tableName || "").trim().toLowerCase();
+  const normalizedPrefix = normalizePrefix(prefix);
+  if (!normalizedTable || !normalizedPrefix) {
+    return false;
+  }
+  return normalizedTable.startsWith(normalizedPrefix);
+}
+
 function decodeRouteSegment(segment) {
   const raw = String(segment || "");
   try {
@@ -395,11 +408,20 @@ export async function listSupabaseExposedTables(config, schema = "public", optio
   }
 
   const uniqueTables = [...new Set(found)].sort((a, b) => a.localeCompare(b));
-  const filtered = uniqueTables;
+  const managedPrefix = String(options?.tablePrefix || "").trim();
+  const managedOnly = options?.managedOnly === true;
+  const managedTables = managedPrefix
+    ? uniqueTables.filter((tableName) => hasManagedPrefix(tableName, managedPrefix))
+    : [];
+  const filtered = managedOnly && managedPrefix ? managedTables : uniqueTables;
 
   return {
     ok: true,
     schema: openApiResult.schema,
+    managed_prefix: managedPrefix || null,
+    managed_only: managedOnly,
+    total_all: uniqueTables.length,
+    managed_total: managedTables.length,
     tables: filtered,
     total: filtered.length,
   };

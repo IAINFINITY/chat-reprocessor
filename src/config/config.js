@@ -65,7 +65,11 @@ export function getConfig() {
     mediaAudioPromptPath: process.env.MEDIA_AUDIO_PROMPT_PATH || "prompts/media_audio_prompt.txt",
     mediaImagePromptPath: process.env.MEDIA_IMAGE_PROMPT_PATH || "prompts/media_image_prompt.txt",
     supabaseUrl: String(process.env.SUPABASE_URL || "").trim(),
+    supabaseAnonKey: String(process.env.SUPABASE_ANON_KEY || "").trim(),
     supabaseServiceRoleKey: String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim(),
+    supabaseManagedTablePrefix: String(
+      process.env.SUPABASE_MANAGED_TABLE_PREFIX || "REPROCESSAMENTO - ",
+    ).trim(),
     pauseCheckTimeoutMs: Number(process.env.PAUSE_CHECK_TIMEOUT_MS || 8000),
     pauseCheckSampleLimit: Number(process.env.PAUSE_CHECK_SAMPLE_LIMIT || 200),
     n8nErrorCallbackSecret: String(process.env.N8N_ERROR_CALLBACK_SECRET || "").trim(),
@@ -88,9 +92,21 @@ export function getConfig() {
     configWriteHeader: String(process.env.CONFIG_WRITE_HEADER || "x-config-secret")
       .trim()
       .toLowerCase(),
-    tempAuthEnabled: String(process.env.TEMP_AUTH_ENABLED || "false").toLowerCase() === "true",
-    tempAuthUsername: String(process.env.TEMP_AUTH_USERNAME || "").trim(),
-    tempAuthPassword: String(process.env.TEMP_AUTH_PASSWORD || ""),
+    authEnabled: String(process.env.AUTH_ENABLED || "false").toLowerCase() === "true",
+    authSessionSecret: String(process.env.AUTH_SESSION_SECRET || "").trim(),
+    authCookieName: String(process.env.AUTH_COOKIE_NAME || "ia_auth_session").trim(),
+    authSessionTtlHours: Number(process.env.AUTH_SESSION_TTL_HOURS || 8),
+    authAllowedUsersTable: String(
+      process.env.AUTH_ALLOWED_USERS_TABLE || "REPROCESSAMENTO - allowed_users",
+    ).trim(),
+    authAllowedUsersEmailColumn: String(
+      process.env.AUTH_ALLOWED_USERS_EMAIL_COLUMN || "email",
+    ).trim(),
+    authAllowedUsersActiveColumn: String(
+      process.env.AUTH_ALLOWED_USERS_ACTIVE_COLUMN || "active",
+    ).trim(),
+    authSignupBlockMode: String(process.env.AUTH_SIGNUP_BLOCK_MODE || "unknown").trim(),
+    authSignupEvidenceNote: String(process.env.AUTH_SIGNUP_EVIDENCE_NOTE || "").trim(),
   };
 }
 
@@ -103,6 +119,21 @@ export function assertRequiredConfig(config) {
 
   if (!config.chatwootBaseUrl) {
     missing.push("CHATWOOT_BASE_URL");
+  }
+
+  if (config.authEnabled) {
+    if (!config.supabaseUrl) {
+      missing.push("SUPABASE_URL");
+    }
+    if (!config.supabaseAnonKey) {
+      missing.push("SUPABASE_ANON_KEY");
+    }
+    if (!config.supabaseServiceRoleKey) {
+      missing.push("SUPABASE_SERVICE_ROLE_KEY");
+    }
+    if (!config.authSessionSecret) {
+      missing.push("AUTH_SESSION_SECRET");
+    }
   }
 
   if (missing.length > 0) {

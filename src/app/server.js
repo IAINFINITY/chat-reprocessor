@@ -25,9 +25,16 @@ import {
   registerN8nStatusEvent,
   registerWebhookDispatchEvent,
 } from "../stores/n8nErrorStore.js";
+import {
+  configureAuthAuditStore,
+  getAuthAuditStats,
+  listAuthAuditEvents,
+  registerAuthAuditEvent,
+} from "../stores/authAuditStore.js";
 import { getReprocessClient, listReprocessClients } from "../domain/reprocessClients.js";
 import { reprocessConversation } from "../api/reprocessConversation.js";
 import { listSupabaseExposedTables } from "../clients/supabaseClient.js";
+import { createSupabaseAdminClient } from "../clients/supabaseClient.js";
 import { findWebhookMappingByAccountName } from "../domain/webhookResolver.js";
 import { inspectPauseConfigForClient } from "../services/pauseChecker.js";
 import {
@@ -47,6 +54,7 @@ configureN8nEventStore({
   filePath: config.n8nEventStorePath,
   maxEvents: config.n8nEventStoreMaxEvents,
 });
+configureAuthAuditStore();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,12 +81,22 @@ const STATIC_CONTENT_TYPES = {
   ".map": "application/json; charset=utf-8",
 };
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
-const tempAuthFailedAttempts = new Map();
-const TEMP_AUTH_COOKIE_NAME = "ia_temp_auth";
-const TEMP_AUTH_WINDOW_MS = 10 * 60 * 1000;
-const TEMP_AUTH_MAX_ATTEMPTS = 10;
-const TEMP_AUTH_BLOCK_MS = 15 * 60 * 1000;
-const TEMP_AUTH_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const authFailedAttempts = new Map();
+const authCredentialFailedAttempts = new Map();
+const authSessionStore = new Map();
+const AUTH_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 10;
+const AUTH_CREDENTIAL_MAX_ATTEMPTS = 8;
+const AUTH_BLOCK_MS = 15 * 60 * 1000;
+const AUTH_REVOKED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
+const AUTH_MIN_FAILURE_RESPONSE_MS = 650;
+const AUTH_CSRF_COOKIE_NAME = "ia_auth_csrf";
+const AUTH_CSRF_HEADER_NAME = "x-csrf-token";
+const AUTH_MEMORY_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const AUTH_ROLE_LEVELS = Object.freeze({
+  operator: 10,
+  admin: 20,
+});
 
 function getClientIp(req) {
   const xForwardedFor = req.headers["x-forwarded-for"];
@@ -93,6 +111,41 @@ function getClientIp(req) {
   return String(req.socket?.remoteAddress || "").trim() || "unknown";
 }
 
+function normalizeAuthRole(role) {
+  const normalized = String(role || "").trim().toLowerCase();
+  if (normalized in AUTH_ROLE_LEVELS) {
+    return normalized;
+  }
+  return "operator";
+}
+
+function getAuthRoleLevel(role) {
+  const normalizedRole = normalizeAuthRole(role);
+  return Number(AUTH_ROLE_LEVELS[normalizedRole] || AUTH_ROLE_LEVELS.operator);
+}
+
+function hasRequiredAuthRole(currentRole, requiredRole) {
+  return getAuthRoleLevel(currentRole) >= getAuthRoleLevel(requiredRole);
+}
+
+function getRequestPath(req) {
+  return String(req.url || "/").split("?")[0] || "/";
+}
+
+function registerAuthAudit(req, payload = {}) {
+  try {
+    return registerAuthAuditEvent({
+      ...payload,
+      ip: payload.ip || getClientIp(req),
+      user_agent: payload.user_agent || String(req.headers["user-agent"] || "").slice(0, 360),
+      request_path: payload.request_path || getRequestPath(req),
+      request_method: payload.request_method || String(req.method || "GET").toUpperCase(),
+    });
+  } catch {
+    return null;
+  }
+}
+
 function safeEquals(left, right) {
   const a = Buffer.from(String(left || ""), "utf8");
   const b = Buffer.from(String(right || ""), "utf8");
@@ -102,34 +155,6 @@ function safeEquals(left, right) {
   }
 
   return timingSafeEqual(a, b);
-}
-
-function parseBasicAuthHeader(req) {
-  const rawAuth = req.headers.authorization;
-  const header = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
-  if (!header || !String(header).startsWith("Basic ")) {
-    return null;
-  }
-
-  const encoded = String(header).slice(6).trim();
-  if (!encoded) {
-    return null;
-  }
-
-  try {
-    const decoded = Buffer.from(encoded, "base64").toString("utf8");
-    const separatorIndex = decoded.indexOf(":");
-    if (separatorIndex <= 0) {
-      return null;
-    }
-
-    return {
-      username: decoded.slice(0, separatorIndex),
-      password: decoded.slice(separatorIndex + 1),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function parseCookieHeader(req) {
@@ -160,83 +185,183 @@ function parseCookieHeader(req) {
   return result;
 }
 
-function buildTempAuthSessionSecret(config) {
-  return createHmac("sha256", "ia-infinity-temp-auth-secret")
-    .update(String(config?.tempAuthUsername || ""))
-    .update(":")
-    .update(String(config?.tempAuthPassword || ""))
-    .update(":")
-    .update(String(config?.chatwootApiToken || ""))
-    .digest("hex");
+function readHeaderValue(req, name) {
+  const raw = req.headers[String(name || "").toLowerCase()];
+  if (Array.isArray(raw) && raw.length > 0) {
+    return String(raw[0] || "").trim();
+  }
+  return String(raw || "").trim();
 }
 
-function createTempAuthSessionToken(config) {
-  const now = Date.now();
-  const payload = {
-    sub: String(config.tempAuthUsername || ""),
-    iat: now,
-    exp: now + TEMP_AUTH_SESSION_TTL_MS,
-    nonce: randomBytes(12).toString("hex"),
-  };
-  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const signature = createHmac("sha256", buildTempAuthSessionSecret(config))
-    .update(encodedPayload)
-    .digest("base64url");
-  return `${encodedPayload}.${signature}`;
+function appendSetCookie(res, cookie) {
+  const nextCookie = String(cookie || "").trim();
+  if (!nextCookie) {
+    return;
+  }
+
+  const current = res.getHeader("Set-Cookie");
+  if (!current) {
+    res.setHeader("Set-Cookie", nextCookie);
+    return;
+  }
+
+  if (Array.isArray(current)) {
+    res.setHeader("Set-Cookie", [...current, nextCookie]);
+    return;
+  }
+
+  res.setHeader("Set-Cookie", [String(current), nextCookie]);
 }
 
-function verifyTempAuthSessionToken(token, config) {
-  const parts = String(token || "").split(".");
-  if (parts.length !== 2) {
-    return false;
+function getAuthCsrfCookie(req) {
+  const cookies = parseCookieHeader(req);
+  return String(cookies[AUTH_CSRF_COOKIE_NAME] || "").trim();
+}
+
+function buildAuthCsrfCookie(token, req, { clear = false } = {}) {
+  const secure =
+    String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https" ||
+    Boolean(req.socket?.encrypted);
+
+  const parts = [`${AUTH_CSRF_COOKIE_NAME}=${encodeURIComponent(clear ? "" : token)}`];
+  parts.push("Path=/");
+  parts.push("SameSite=Lax");
+  if (secure) {
+    parts.push("Secure");
   }
 
-  const encodedPayload = parts[0];
-  const receivedSignature = parts[1];
-  if (!encodedPayload || !receivedSignature) {
-    return false;
+  if (clear) {
+    parts.push("Max-Age=0");
+  } else {
+    parts.push("Max-Age=28800");
   }
 
-  const expectedSignature = createHmac("sha256", buildTempAuthSessionSecret(config))
-    .update(encodedPayload)
-    .digest("base64url");
-  if (!safeEquals(receivedSignature, expectedSignature)) {
-    return false;
+  return parts.join("; ");
+}
+
+function ensureAuthCsrfCookie(req, res) {
+  const current = getAuthCsrfCookie(req);
+  if (current) {
+    return current;
   }
 
-  let payload = null;
-  try {
-    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
-  } catch {
-    return false;
-  }
+  const token = randomBytes(24).toString("hex");
+  appendSetCookie(res, buildAuthCsrfCookie(token, req));
+  return token;
+}
 
-  const exp = Number(payload?.exp || 0);
-  const sub = String(payload?.sub || "");
-  if (!Number.isFinite(exp) || exp <= Date.now()) {
-    return false;
-  }
-  if (!safeEquals(sub, String(config?.tempAuthUsername || ""))) {
+function enforceAuthCsrf(req, res) {
+  const cookieToken = getAuthCsrfCookie(req);
+  const headerToken = readHeaderValue(req, AUTH_CSRF_HEADER_NAME);
+
+  if (!cookieToken || !headerToken || !safeEquals(cookieToken, headerToken)) {
+    json(res, 403, {
+      success: false,
+      error: "invalid_csrf_token",
+      message: "Token CSRF inválido. Recarregue a página e tente novamente.",
+    });
     return false;
   }
 
   return true;
 }
 
-function readTempAuthSessionFromRequest(req, config) {
-  const cookies = parseCookieHeader(req);
-  const token = String(cookies[TEMP_AUTH_COOKIE_NAME] || "").trim();
-  if (!token) {
-    return false;
+async function waitForAuthFailureWindow(startedAtMs) {
+  const elapsed = Date.now() - Number(startedAtMs || 0);
+  const remaining = AUTH_MIN_FAILURE_RESPONSE_MS - elapsed;
+  if (remaining <= 0) {
+    return;
   }
-  return verifyTempAuthSessionToken(token, config);
+  await new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
-function buildTempAuthCookie(token, req, { clear = false } = {}) {
+function getAuthSessionTtlMs(config) {
+  const hours = Number(config?.authSessionTtlHours || 8);
+  if (!Number.isFinite(hours) || hours <= 0) {
+    return 8 * 60 * 60 * 1000;
+  }
+  return Math.floor(hours * 60 * 60 * 1000);
+}
+
+function getAuthCookieName(config) {
+  return String(config?.authCookieName || "ia_auth_session").trim() || "ia_auth_session";
+}
+
+function buildAuthSessionSecret(config) {
+  return String(config?.authSessionSecret || "").trim();
+}
+
+function createAuthSessionToken(config, sessionData = {}) {
+  const secret = buildAuthSessionSecret(config);
+  const now = Date.now();
+  const sid = String(sessionData.sid || randomBytes(16).toString("hex")).trim();
+  const payload = {
+    sid,
+    sub: String(sessionData.user_id || sessionData.sub || ""),
+    email: String(sessionData.email || ""),
+    role: String(sessionData.role || "operator"),
+    iat: now,
+    exp: now + getAuthSessionTtlMs(config),
+    nonce: randomBytes(12).toString("hex"),
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = createHmac("sha256", secret)
+    .update(encodedPayload)
+    .digest("base64url");
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyAuthSessionToken(token, config) {
+  const secret = buildAuthSessionSecret(config);
+  if (!secret) {
+    return null;
+  }
+
+  const parts = String(token || "").split(".");
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const encodedPayload = parts[0];
+  const receivedSignature = parts[1];
+  if (!encodedPayload || !receivedSignature) {
+    return null;
+  }
+
+  const expectedSignature = createHmac("sha256", secret)
+    .update(encodedPayload)
+    .digest("base64url");
+  if (!safeEquals(receivedSignature, expectedSignature)) {
+    return null;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+
+  const exp = Number(payload?.exp || 0);
+  const sid = String(payload?.sid || "");
+  const sub = String(payload?.sub || "");
+  const email = String(payload?.email || "");
+  if (!Number.isFinite(exp) || exp <= Date.now()) {
+    return null;
+  }
+  if (!sid || !sub || !email) {
+    return null;
+  }
+
+  return payload;
+}
+
+function buildAuthCookie(token, req, config, { clear = false } = {}) {
   const secure =
     String(req.headers["x-forwarded-proto"] || "").toLowerCase() === "https" ||
     Boolean(req.socket?.encrypted);
-  const parts = [`${TEMP_AUTH_COOKIE_NAME}=${encodeURIComponent(clear ? "" : token)}`];
+  const cookieName = getAuthCookieName(config);
+  const parts = [`${cookieName}=${encodeURIComponent(clear ? "" : token)}`];
   parts.push("Path=/");
   parts.push("HttpOnly");
   parts.push("SameSite=Lax");
@@ -246,30 +371,22 @@ function buildTempAuthCookie(token, req, { clear = false } = {}) {
   if (clear) {
     parts.push("Max-Age=0");
   } else {
-    parts.push(`Max-Age=${Math.floor(TEMP_AUTH_SESSION_TTL_MS / 1000)}`);
+    parts.push(`Max-Age=${Math.floor(getAuthSessionTtlMs(config) / 1000)}`);
   }
   return parts.join("; ");
 }
 
-function isHtmlNavigationRequest(req) {
-  const accept = String(req.headers.accept || "");
-  return accept.includes("text/html");
-}
-
-function isTempAuthPublicPath(pathname) {
-  if (pathname === "/login") {
+function isAuthPublicPath(pathname) {
+  if (pathname === "/login" || pathname === "/health") {
     return true;
   }
 
   if (
-    pathname === "/api/auth/temp/login" ||
-    pathname === "/api/auth/temp/session" ||
-    pathname === "/api/auth/temp/logout"
+    pathname === "/api/auth/login" ||
+    pathname === "/api/auth/session" ||
+    pathname === "/api/auth/logout" ||
+    pathname === "/api/auth/health"
   ) {
-    return true;
-  }
-
-  if (pathname === "/health") {
     return true;
   }
 
@@ -291,9 +408,362 @@ function isTempAuthPublicPath(pathname) {
   return false;
 }
 
-function getTempAuthAttemptEntry(clientIp) {
+async function authenticateSupabasePassword(config, email, password) {
+  const supabaseUrl = String(config?.supabaseUrl || "").trim().replace(/\/+$/, "");
+  const anonKey = String(config?.supabaseAnonKey || "").trim();
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: anonKey,
+    },
+    body: JSON.stringify({
+      email,
+      password,
+    }),
+  });
+
+  const raw = await response.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      statusCode: response.status,
+      message: String(data?.msg || data?.error_description || data?.error || "Falha de autenticação no Supabase."),
+    };
+  }
+
+  return {
+    ok: true,
+    user: data?.user || null,
+  };
+}
+
+async function checkUserAllowed(config, email) {
+  const adminClient = createSupabaseAdminClient(config);
+  if (!adminClient) {
+    return {
+      allowed: false,
+      reason: "supabase_not_configured",
+    };
+  }
+
+  const table = String(config?.authAllowedUsersTable || "REPROCESSAMENTO - allowed_users").trim();
+  const emailColumn = String(config?.authAllowedUsersEmailColumn || "email").trim();
+  const activeColumn = String(config?.authAllowedUsersActiveColumn || "active").trim();
+
+  const { data, error } = await adminClient
+    .from(table)
+    .select(`${emailColumn},${activeColumn},role`)
+    .eq(emailColumn, email)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    return {
+      allowed: false,
+      reason: "allowlist_lookup_failed",
+      message: error.message || "Falha ao validar allowlist.",
+    };
+  }
+
+  if (!data) {
+    return {
+      allowed: false,
+      reason: "user_not_in_allowlist",
+    };
+  }
+
+  const active = Boolean(data?.[activeColumn] === true || String(data?.[activeColumn] || "").toLowerCase() === "true");
+  if (!active) {
+    return {
+      allowed: false,
+      reason: "user_inactive",
+    };
+  }
+
+  return {
+    allowed: true,
+    role: String(data?.role || "operator"),
+  };
+}
+
+function isHtmlNavigationRequest(req) {
+  const accept = String(req.headers.accept || "");
+  return accept.includes("text/html");
+}
+
+function cleanExpiredAuthSessions(now = Date.now()) {
+  for (const [sid, session] of authSessionStore.entries()) {
+    if (!session || typeof session !== "object") {
+      authSessionStore.delete(sid);
+      continue;
+    }
+
+    const expiresAtMs = Number(session.expiresAtMs || 0);
+    const revokedAtMs = Number(session.revokedAtMs || 0);
+    if (expiresAtMs > 0 && expiresAtMs <= now) {
+      authSessionStore.delete(sid);
+      continue;
+    }
+
+    if (revokedAtMs > 0 && now - revokedAtMs > AUTH_REVOKED_SESSION_RETENTION_MS) {
+      authSessionStore.delete(sid);
+    }
+  }
+}
+
+function getRequestProtocol(req) {
+  const rawProto = req.headers["x-forwarded-proto"];
+  if (Array.isArray(rawProto) && rawProto.length > 0) {
+    return String(rawProto[0] || "http").split(",")[0].trim().toLowerCase() || "http";
+  }
+  if (typeof rawProto === "string") {
+    return String(rawProto).split(",")[0].trim().toLowerCase() || "http";
+  }
+  return req.socket?.encrypted ? "https" : "http";
+}
+
+function getRequestHost(req) {
+  const rawForwardedHost = req.headers["x-forwarded-host"];
+  if (Array.isArray(rawForwardedHost) && rawForwardedHost.length > 0) {
+    return String(rawForwardedHost[0] || "").split(",")[0].trim();
+  }
+  if (typeof rawForwardedHost === "string" && rawForwardedHost.trim()) {
+    return String(rawForwardedHost).split(",")[0].trim();
+  }
+  const rawHost = req.headers.host;
+  if (Array.isArray(rawHost) && rawHost.length > 0) {
+    return String(rawHost[0] || "").trim();
+  }
+  return String(rawHost || "").trim();
+}
+
+function getExpectedRequestOrigin(req) {
+  const host = getRequestHost(req);
+  const protocol = getRequestProtocol(req);
+  if (!host) {
+    return "";
+  }
+  return `${protocol}://${host}`.toLowerCase();
+}
+
+function extractOriginFromUrlish(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    return new URL(raw).origin.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function resolveRequestSourceOrigin(req) {
+  const rawOrigin = req.headers.origin;
+  const originHeader = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  const parsedOrigin = extractOriginFromUrlish(originHeader);
+  if (parsedOrigin) {
+    return parsedOrigin;
+  }
+
+  const rawReferer = req.headers.referer;
+  const refererHeader = Array.isArray(rawReferer) ? rawReferer[0] : rawReferer;
+  return extractOriginFromUrlish(refererHeader);
+}
+
+function validateRequestOrigin(req) {
+  const expectedOrigin = getExpectedRequestOrigin(req);
+  const sourceOrigin = resolveRequestSourceOrigin(req);
+
+  if (!expectedOrigin || !sourceOrigin) {
+    return {
+      ok: false,
+      code: "origin_missing",
+      message: "Origin/Referer ausente na requisição.",
+    };
+  }
+
+  if (!safeEquals(sourceOrigin, expectedOrigin)) {
+    return {
+      ok: false,
+      code: "origin_mismatch",
+      message: "Origin/Referer inválido para este host.",
+      details: {
+        expected: expectedOrigin,
+        received: sourceOrigin,
+      },
+    };
+  }
+
+  return { ok: true };
+}
+
+function enforceAuthOrigin(req, res) {
+  const validation = validateRequestOrigin(req);
+  if (validation.ok) {
+    return true;
+  }
+
+  const payload = {
+    success: false,
+    error: "invalid_request_origin",
+    message: "Origem da requisição não autorizada.",
+    details: {
+      reason: validation.code,
+    },
+  };
+
+  if (validation.details) {
+    payload.details = {
+      ...payload.details,
+      ...validation.details,
+    };
+  }
+
+  json(res, 403, payload);
+  return false;
+}
+
+function getAuthSessionRecord(sid) {
+  const safeSid = String(sid || "").trim();
+  if (!safeSid) {
+    return null;
+  }
+
+  cleanExpiredAuthSessions();
+  const record = authSessionStore.get(safeSid);
+  if (!record) {
+    return null;
+  }
+
+  if (Number(record.revokedAtMs || 0) > 0) {
+    return null;
+  }
+
+  if (Number(record.expiresAtMs || 0) <= Date.now()) {
+    authSessionStore.delete(safeSid);
+    return null;
+  }
+
+  return record;
+}
+
+function registerAuthSession(req, payload) {
+  const sid = String(payload?.sid || "").trim();
+  if (!sid) {
+    return;
+  }
+
+  authSessionStore.set(sid, {
+    sid,
+    sub: String(payload?.sub || ""),
+    email: String(payload?.email || "").toLowerCase(),
+    role: String(payload?.role || "operator"),
+    issuedAtMs: Number(payload?.iat || Date.now()),
+    expiresAtMs: Number(payload?.exp || 0),
+    createdAtMs: Date.now(),
+    updatedAtMs: Date.now(),
+    revokedAtMs: 0,
+    ip: getClientIp(req),
+    userAgent: String(req.headers["user-agent"] || "").slice(0, 512),
+  });
+}
+
+function revokeAuthSession(sid) {
+  const safeSid = String(sid || "").trim();
+  if (!safeSid) {
+    return;
+  }
+
+  const existing = authSessionStore.get(safeSid);
+  if (!existing) {
+    return;
+  }
+
+  authSessionStore.set(safeSid, {
+    ...existing,
+    revokedAtMs: Date.now(),
+    updatedAtMs: Date.now(),
+  });
+}
+
+function revokeSessionsByEmail(email) {
+  const targetEmail = String(email || "").trim().toLowerCase();
+  if (!targetEmail) {
+    return;
+  }
+
+  cleanExpiredAuthSessions();
+  for (const [sid, session] of authSessionStore.entries()) {
+    if (!session || typeof session !== "object") {
+      continue;
+    }
+    if (String(session.email || "").toLowerCase() !== targetEmail) {
+      continue;
+    }
+    authSessionStore.set(sid, {
+      ...session,
+      revokedAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+    });
+  }
+}
+
+function resolveAuthSessionPayloadFromRequest(req, config) {
+  const cookies = parseCookieHeader(req);
+  const cookieName = getAuthCookieName(config);
+  const token = String(cookies[cookieName] || "").trim();
+  if (!token) {
+    return null;
+  }
+  return verifyAuthSessionToken(token, config);
+}
+
+function readAuthSessionFromRequest(req, config) {
+  const payload = resolveAuthSessionPayloadFromRequest(req, config);
+  if (!payload) {
+    return null;
+  }
+
+  const sid = String(payload?.sid || "").trim();
+  const record = getAuthSessionRecord(sid);
+  if (!record) {
+    return null;
+  }
+
+  if (
+    !safeEquals(String(record.sub || ""), String(payload.sub || "")) ||
+    !safeEquals(String(record.email || "").toLowerCase(), String(payload.email || "").toLowerCase())
+  ) {
+    return null;
+  }
+
+  authSessionStore.set(sid, {
+    ...record,
+    updatedAtMs: Date.now(),
+  });
+
+  return payload;
+}
+
+function getAttemptEntry(store, key) {
   const now = Date.now();
-  const cached = tempAuthFailedAttempts.get(clientIp);
+  const safeKey = String(key || "").trim();
+  if (!safeKey) {
+    return null;
+  }
+
+  const cached = store.get(safeKey);
   if (!cached) {
     return null;
   }
@@ -303,19 +773,40 @@ function getTempAuthAttemptEntry(clientIp) {
   }
 
   if (cached.windowStartedAtMs + cached.windowMs <= now) {
-    tempAuthFailedAttempts.delete(clientIp);
+    store.delete(safeKey);
     return null;
   }
 
   return cached;
 }
 
-function registerTempAuthFailure(clientIp) {
+function cleanExpiredAttemptStore(store, now = Date.now()) {
+  for (const [key, entry] of store.entries()) {
+    if (!entry || typeof entry !== "object") {
+      store.delete(key);
+      continue;
+    }
+
+    const blockedUntilMs = Number(entry.blockedUntilMs || 0);
+    const windowStartedAtMs = Number(entry.windowStartedAtMs || 0);
+    const windowMs = Number(entry.windowMs || AUTH_WINDOW_MS);
+    const windowExpired = windowStartedAtMs > 0 && windowStartedAtMs + windowMs <= now;
+    const blockExpired = blockedUntilMs > 0 && blockedUntilMs <= now;
+
+    if (windowExpired && (blockedUntilMs <= 0 || blockExpired)) {
+      store.delete(key);
+    }
+  }
+}
+
+function registerFailure(store, key, maxAttempts = AUTH_MAX_ATTEMPTS) {
   const now = Date.now();
-  const windowMs = TEMP_AUTH_WINDOW_MS;
-  const maxAttempts = TEMP_AUTH_MAX_ATTEMPTS;
-  const blockMs = TEMP_AUTH_BLOCK_MS;
-  const existing = getTempAuthAttemptEntry(clientIp);
+  const safeKey = String(key || "").trim();
+  if (!safeKey) {
+    return null;
+  }
+
+  const existing = getAttemptEntry(store, safeKey);
 
   const entry = existing
     ? {
@@ -325,30 +816,95 @@ function registerTempAuthFailure(clientIp) {
     : {
         attempts: 1,
         windowStartedAtMs: now,
-        windowMs,
+        windowMs: AUTH_WINDOW_MS,
         blockedUntilMs: 0,
       };
 
   if (entry.attempts >= maxAttempts) {
-    entry.blockedUntilMs = now + blockMs;
+    entry.blockedUntilMs = now + AUTH_BLOCK_MS;
   }
 
-  tempAuthFailedAttempts.set(clientIp, entry);
+  store.set(safeKey, entry);
   return entry;
 }
 
-function clearTempAuthFailures(clientIp) {
-  if (!clientIp) {
+function clearFailure(store, key) {
+  const safeKey = String(key || "").trim();
+  if (!safeKey) {
     return;
   }
-  tempAuthFailedAttempts.delete(clientIp);
+  store.delete(safeKey);
 }
 
-function writeTempAuthUnauthorizedJson(res, statusCode, message) {
+function normalizeCredentialKey(username) {
+  return String(username || "").trim().toLowerCase();
+}
+
+function getAuthAttemptEntry(clientIp) {
+  return getAttemptEntry(authFailedAttempts, clientIp);
+}
+
+function getAuthCredentialAttemptEntry(username) {
+  return getAttemptEntry(authCredentialFailedAttempts, normalizeCredentialKey(username));
+}
+
+function registerAuthFailure(clientIp) {
+  return registerFailure(authFailedAttempts, clientIp, AUTH_MAX_ATTEMPTS);
+}
+
+function registerAuthCredentialFailure(username) {
+  return registerFailure(
+    authCredentialFailedAttempts,
+    normalizeCredentialKey(username),
+    AUTH_CREDENTIAL_MAX_ATTEMPTS,
+  );
+}
+
+function clearAuthFailures(clientIp) {
+  clearFailure(authFailedAttempts, clientIp);
+}
+
+function clearAuthCredentialFailures(username) {
+  clearFailure(authCredentialFailedAttempts, normalizeCredentialKey(username));
+}
+
+function getAuthRuntimeStats() {
+  cleanExpiredAuthSessions();
+  cleanExpiredAttemptStore(authFailedAttempts);
+  cleanExpiredAttemptStore(authCredentialFailedAttempts);
+
+  let activeSessions = 0;
+  let revokedSessions = 0;
+  for (const session of authSessionStore.values()) {
+    if (!session || typeof session !== "object") {
+      continue;
+    }
+    if (Number(session.revokedAtMs || 0) > 0) {
+      revokedSessions += 1;
+    } else {
+      activeSessions += 1;
+    }
+  }
+
+  return {
+    active_sessions: activeSessions,
+    revoked_sessions: revokedSessions,
+    tracked_ip_limits: authFailedAttempts.size,
+    tracked_credential_limits: authCredentialFailedAttempts.size,
+  };
+}
+
+setInterval(() => {
+  cleanExpiredAuthSessions();
+  cleanExpiredAttemptStore(authFailedAttempts);
+  cleanExpiredAttemptStore(authCredentialFailedAttempts);
+}, AUTH_MEMORY_CLEANUP_INTERVAL_MS).unref();
+
+function writeAuthUnauthorizedJson(res, statusCode, message) {
   const payload = JSON.stringify(
     {
       success: false,
-      error: "temporary_auth_required",
+      error: "auth_required",
       message,
     },
     null,
@@ -363,54 +919,68 @@ function writeTempAuthUnauthorizedJson(res, statusCode, message) {
   res.end(payload);
 }
 
-function enforceTemporaryAuth(req, res, requestUrl, config) {
-  if (!config?.tempAuthEnabled) {
-    return true;
+function writeAuthForbiddenRoleJson(res, requiredRole) {
+  return json(res, 403, {
+    success: false,
+    error: "insufficient_role",
+    message: "Você não possui permissão para esta ação.",
+    required_role: normalizeAuthRole(requiredRole),
+  });
+}
+
+function enforceRouteRole(req, res, config, requiredRole) {
+  if (!config?.authEnabled) {
+    return { ok: true, session: null };
   }
 
+  const session = readAuthSessionFromRequest(req, config);
+  if (!session) {
+    writeAuthUnauthorizedJson(res, 401, "Autenticação obrigatória para acessar este recurso.");
+    return { ok: false, session: null };
+  }
+
+  const role = normalizeAuthRole(session.role);
+  const targetRole = normalizeAuthRole(requiredRole);
+  if (!hasRequiredAuthRole(role, targetRole)) {
+    registerAuthAudit(req, {
+      event_type: "authorization",
+      outcome: "denied",
+      reason: "insufficient_role",
+      email: String(session.email || "").toLowerCase(),
+      role,
+      session_id: String(session.sid || ""),
+      details: {
+        required_role: targetRole,
+      },
+    });
+    writeAuthForbiddenRoleJson(res, targetRole);
+    return { ok: false, session };
+  }
+
+  return { ok: true, session };
+}
+
+function enforceFixedAuth(req, res, requestUrl, config) {
   const pathname = requestUrl.pathname;
-
-  if (isTempAuthPublicPath(pathname)) {
+  if (isAuthPublicPath(pathname)) {
     return true;
   }
 
-  if (!config?.tempAuthUsername || !config?.tempAuthPassword) {
+  if (!config?.authSessionSecret || !config?.supabaseUrl || !config?.supabaseAnonKey || !config?.supabaseServiceRoleKey) {
     json(res, 500, {
       success: false,
-      error: "temporary_auth_misconfigured",
-      message: "TEMP_AUTH_ENABLED=true, mas TEMP_AUTH_USERNAME/TEMP_AUTH_PASSWORD nao foram definidos.",
+      error: "auth_misconfigured",
+      message: "AUTH_ENABLED=true, mas variáveis de autenticação não foram definidas corretamente.",
     });
     return false;
   }
 
   const clientIp = getClientIp(req);
-  const attemptEntry = getTempAuthAttemptEntry(clientIp);
-  const now = Date.now();
-
-  if (attemptEntry?.blockedUntilMs && attemptEntry.blockedUntilMs > now) {
-    writeTempAuthUnauthorizedJson(
-      res,
-      429,
-      "Muitas tentativas de autenticacao. Tente novamente em alguns minutos.",
-    );
-    return false;
-  }
-
-  if (readTempAuthSessionFromRequest(req, config)) {
-    clearTempAuthFailures(clientIp);
+  const sessionPayload = readAuthSessionFromRequest(req, config);
+  if (sessionPayload) {
+    clearAuthFailures(clientIp);
     return true;
   }
-
-  const parsed = parseBasicAuthHeader(req);
-  const usernameOk = safeEquals(parsed?.username || "", config.tempAuthUsername);
-  const passwordOk = safeEquals(parsed?.password || "", config.tempAuthPassword);
-
-  if (usernameOk && passwordOk) {
-    clearTempAuthFailures(clientIp);
-    return true;
-  }
-
-  registerTempAuthFailure(clientIp);
 
   if (isHtmlNavigationRequest(req)) {
     const next = `${requestUrl.pathname}${requestUrl.search || ""}${requestUrl.hash || ""}`;
@@ -423,8 +993,15 @@ function enforceTemporaryAuth(req, res, requestUrl, config) {
     return false;
   }
 
-  writeTempAuthUnauthorizedJson(res, 401, "Autenticacao obrigatoria para acessar este ambiente.");
+  writeAuthUnauthorizedJson(res, 401, "Autenticação obrigatória para acessar este ambiente.");
   return false;
+}
+
+function enforceAuth(req, res, requestUrl, config) {
+  if (!config?.authEnabled) {
+    return true;
+  }
+  return enforceFixedAuth(req, res, requestUrl, config);
 }
 
 function toApiErrorResponse(error) {
@@ -555,6 +1132,18 @@ function resolveSafeNextPath(rawNext) {
   }
 
   return next;
+}
+
+function isAuthSessionRoute(req, pathname) {
+  return req.method === "GET" && pathname === "/api/auth/session";
+}
+
+function isAuthLoginRoute(req, pathname) {
+  return req.method === "POST" && pathname === "/api/auth/login";
+}
+
+function isAuthLogoutRoute(req, pathname) {
+  return req.method === "POST" && pathname === "/api/auth/logout";
 }
 
 async function readJsonBody(req) {
@@ -912,7 +1501,7 @@ const server = createServer(async (req, res) => {
   const requestUrl = getRequestUrl(req);
   const pathname = requestUrl.pathname;
 
-  if (!enforceTemporaryAuth(req, res, requestUrl, config)) {
+  if (!enforceAuth(req, res, requestUrl, config)) {
     return;
   }
 
@@ -921,7 +1510,9 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/login") {
-    if (config.tempAuthEnabled && readTempAuthSessionFromRequest(req, config)) {
+    ensureAuthCsrfCookie(req, res);
+    const hasSession = Boolean(readAuthSessionFromRequest(req, config));
+    if (hasSession) {
       const nextPath = resolveSafeNextPath(requestUrl.searchParams.get("next"));
       res.writeHead(302, {
         Location: nextPath,
@@ -942,82 +1533,334 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "GET" && pathname === "/api/auth/temp/session") {
-    const authenticated = config.tempAuthEnabled
-      ? readTempAuthSessionFromRequest(req, config)
-      : true;
+  if (isAuthSessionRoute(req, pathname)) {
+    const csrfToken = ensureAuthCsrfCookie(req, res);
+    let authSession = readAuthSessionFromRequest(req, config);
+
+    if (config.authEnabled && authSession?.email) {
+      const allowResult = await checkUserAllowed(
+        config,
+        String(authSession.email || "").trim().toLowerCase(),
+      );
+
+      if (!allowResult.allowed) {
+        if (allowResult.reason === "allowlist_lookup_failed") {
+        return json(res, 200, {
+          success: true,
+          auth_enabled: true,
+          auth_mode: "fixed",
+          authenticated: true,
+            session: {
+              email: String(authSession.email || ""),
+            role: String(authSession.role || "operator"),
+            exp: Number(authSession.exp || 0),
+          },
+          warning: "allowlist_check_temporarily_unavailable",
+          csrf_token: csrfToken,
+        });
+      }
+
+        if (authSession?.sid) {
+          revokeAuthSession(authSession.sid);
+        }
+        registerAuthAudit(req, {
+          event_type: "session_revoked",
+          outcome: "success",
+          reason: "allowlist_revoked",
+          email: String(authSession?.email || "").toLowerCase(),
+          role: normalizeAuthRole(authSession?.role),
+          session_id: String(authSession?.sid || ""),
+        });
+        res.setHeader("Set-Cookie", buildAuthCookie("", req, config, { clear: true }));
+        return json(res, 200, {
+          success: true,
+          auth_enabled: true,
+          auth_mode: "fixed",
+          authenticated: false,
+          session: null,
+          reason: "allowlist_revoked",
+          csrf_token: csrfToken,
+        });
+      }
+
+      const resolvedRole = String(allowResult.role || "operator");
+      if (resolvedRole && resolvedRole !== String(authSession.role || "")) {
+        if (authSession?.sid) {
+          revokeAuthSession(authSession.sid);
+        }
+
+        const rotatedToken = createAuthSessionToken(config, {
+          user_id: String(authSession.sub || "").trim(),
+          email: String(authSession.email || "").trim().toLowerCase(),
+          role: resolvedRole,
+        });
+        const rotatedPayload = verifyAuthSessionToken(rotatedToken, config);
+        if (rotatedPayload) {
+          registerAuthSession(req, rotatedPayload);
+          res.setHeader("Set-Cookie", buildAuthCookie(rotatedToken, req, config));
+          registerAuthAudit(req, {
+            event_type: "session_rotated",
+            outcome: "success",
+            reason: "role_updated_from_allowlist",
+            email: String(rotatedPayload?.email || "").toLowerCase(),
+            role: normalizeAuthRole(rotatedPayload?.role),
+            session_id: String(rotatedPayload?.sid || ""),
+          });
+          authSession = rotatedPayload;
+        }
+      }
+    }
+
+    const authenticated = config.authEnabled ? Boolean(authSession) : true;
     return json(res, 200, {
       success: true,
-      temp_auth_enabled: Boolean(config.tempAuthEnabled),
+      auth_enabled: Boolean(config.authEnabled),
+      auth_mode: config.authEnabled ? "fixed" : "disabled",
       authenticated,
+      csrf_token: csrfToken,
+      session: authSession
+        ? {
+            email: String(authSession.email || ""),
+            role: String(authSession.role || "operator"),
+            exp: Number(authSession.exp || 0),
+          }
+        : null,
     });
   }
 
-  if (req.method === "POST" && pathname === "/api/auth/temp/login") {
-    if (!config.tempAuthEnabled) {
-      return json(res, 200, {
-        success: true,
-        message: "Auth temporaria desativada neste ambiente.",
-      });
+  if (req.method === "GET" && pathname === "/api/auth/health") {
+    const authSession = readAuthSessionFromRequest(req, config);
+    const auditStats = getAuthAuditStats();
+    return json(res, 200, {
+      success: true,
+      auth_enabled: Boolean(config.authEnabled),
+      auth_mode: config.authEnabled ? "fixed" : "disabled",
+      authenticated: Boolean(authSession),
+      has_auth_session_secret: Boolean(String(config.authSessionSecret || "").trim()),
+      has_supabase_url: Boolean(String(config.supabaseUrl || "").trim()),
+      has_supabase_anon_key: Boolean(String(config.supabaseAnonKey || "").trim()),
+      has_supabase_service_role_key: Boolean(String(config.supabaseServiceRoleKey || "").trim()),
+      allowlist: {
+        table: String(config.authAllowedUsersTable || "REPROCESSAMENTO - allowed_users"),
+        email_column: String(config.authAllowedUsersEmailColumn || "email"),
+        active_column: String(config.authAllowedUsersActiveColumn || "active"),
+      },
+      signup_control: {
+        mode: String(config.authSignupBlockMode || "unknown"),
+        evidence_note: String(config.authSignupEvidenceNote || "") || null,
+      },
+      rate_limit: {
+        ip_max_attempts: AUTH_MAX_ATTEMPTS,
+        credential_max_attempts: AUTH_CREDENTIAL_MAX_ATTEMPTS,
+        block_ms: AUTH_BLOCK_MS,
+        window_ms: AUTH_WINDOW_MS,
+      },
+      audit: auditStats,
+      runtime: getAuthRuntimeStats(),
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/api/auth/audit") {
+    const roleCheck = enforceRouteRole(req, res, config, "admin");
+    if (!roleCheck.ok) {
+      return;
     }
 
-    if (!config?.tempAuthUsername || !config?.tempAuthPassword) {
-      return json(res, 500, {
-        success: false,
-        error: "temporary_auth_misconfigured",
-        message: "TEMP_AUTH_ENABLED=true, mas TEMP_AUTH_USERNAME/TEMP_AUTH_PASSWORD nao foram definidos.",
-      });
+    const limit = Number(requestUrl.searchParams.get("limit") || 50);
+    const eventType = requestUrl.searchParams.get("event_type") || "";
+    const outcome = requestUrl.searchParams.get("outcome") || "";
+    const email = requestUrl.searchParams.get("email") || "";
+    const events = listAuthAuditEvents({
+      limit,
+      eventType,
+      outcome,
+      email,
+    });
+
+    return json(res, 200, {
+      success: true,
+      total: events.length,
+      events,
+    });
+  }
+
+  if (isAuthLoginRoute(req, pathname)) {
+    if (!enforceAuthOrigin(req, res)) {
+      return;
+    }
+    if (!enforceAuthCsrf(req, res)) {
+      return;
     }
 
     const clientIp = getClientIp(req);
-    const attemptEntry = getTempAuthAttemptEntry(clientIp);
+    const attemptEntry = getAuthAttemptEntry(clientIp);
     const now = Date.now();
     if (attemptEntry?.blockedUntilMs && attemptEntry.blockedUntilMs > now) {
+      registerAuthAudit(req, {
+        event_type: "login",
+        outcome: "failed",
+        reason: "ip_rate_limited",
+      });
       return json(res, 429, {
         success: false,
-        error: "temporary_auth_blocked",
+        error: "auth_login_blocked",
         message: "Muitas tentativas de login. Aguarde alguns minutos e tente novamente.",
       });
     }
 
+    const startedAtMs = Date.now();
     try {
       const input = await readJsonBody(req);
-      const username = String(input?.username || "").trim();
+      const username = String(input?.username || input?.email || "").trim().toLowerCase();
       const password = String(input?.password || "");
-
-      const usernameOk = safeEquals(username, config.tempAuthUsername);
-      const passwordOk = safeEquals(password, config.tempAuthPassword);
-      if (!usernameOk || !passwordOk) {
-        registerTempAuthFailure(clientIp);
-        return json(res, 401, {
+      const credentialAttemptEntry = getAuthCredentialAttemptEntry(username);
+      if (credentialAttemptEntry?.blockedUntilMs && credentialAttemptEntry.blockedUntilMs > now) {
+        registerAuthAudit(req, {
+          event_type: "login",
+          outcome: "failed",
+          reason: "credential_rate_limited",
+          email: username || null,
+        });
+        return json(res, 429, {
           success: false,
-          error: "invalid_credentials",
-          message: "Usuario ou senha invalidos.",
+          error: "auth_login_blocked",
+          message: "Muitas tentativas de login. Aguarde alguns minutos e tente novamente.",
         });
       }
 
-      clearTempAuthFailures(clientIp);
-      const token = createTempAuthSessionToken(config);
-      const cookie = buildTempAuthCookie(token, req);
+      if (!username || !password) {
+        registerAuthFailure(clientIp);
+        registerAuthCredentialFailure(username);
+        registerAuthAudit(req, {
+          event_type: "login",
+          outcome: "failed",
+          reason: "missing_credentials",
+          email: username || null,
+        });
+        await waitForAuthFailureWindow(startedAtMs);
+        return json(res, 400, {
+          success: false,
+          error: "invalid_credentials",
+          message: "Credenciais inválidas.",
+        });
+      }
+
+      const authResult = await authenticateSupabasePassword(config, username, password);
+      if (!authResult.ok) {
+        registerAuthFailure(clientIp);
+        registerAuthCredentialFailure(username);
+        registerAuthAudit(req, {
+          event_type: "login",
+          outcome: "failed",
+          reason: "invalid_credentials",
+          email: username,
+        });
+        await waitForAuthFailureWindow(startedAtMs);
+        return json(res, 401, {
+          success: false,
+          error: "invalid_credentials",
+          message: "Credenciais inválidas.",
+        });
+      }
+
+      const allowResult = await checkUserAllowed(config, username);
+      if (!allowResult.allowed) {
+        registerAuthFailure(clientIp);
+        registerAuthCredentialFailure(username);
+        registerAuthAudit(req, {
+          event_type: "login",
+          outcome: "failed",
+          reason: "allowlist_denied",
+          email: username,
+          details: {
+            allow_reason: String(allowResult.reason || "unknown"),
+          },
+        });
+        await waitForAuthFailureWindow(startedAtMs);
+        return json(res, 401, {
+          success: false,
+          error: "invalid_credentials",
+          message: "Credenciais inválidas.",
+        });
+      }
+
+      clearAuthFailures(clientIp);
+      clearAuthCredentialFailures(username);
+      revokeSessionsByEmail(username);
+      const token = createAuthSessionToken(config, {
+        user_id: authResult.user?.id || "",
+        email: username,
+        role: allowResult.role || "operator",
+      });
+      const payload = verifyAuthSessionToken(token, config);
+      if (!payload) {
+        registerAuthAudit(req, {
+          event_type: "login",
+          outcome: "failed",
+          reason: "session_token_issue",
+          email: username,
+          details: {
+            stage: "payload_verification",
+          },
+        });
+        return json(res, 500, {
+          success: false,
+          error: "auth_session_issue",
+          message: "Não foi possível iniciar a sessão.",
+        });
+      }
+      registerAuthSession(req, payload);
+      registerAuthAudit(req, {
+        event_type: "login",
+        outcome: "success",
+        reason: "authenticated",
+        email: username,
+        role: normalizeAuthRole(allowResult.role || "operator"),
+        session_id: String(payload.sid || ""),
+      });
+      const cookie = buildAuthCookie(token, req, config);
       res.setHeader("Set-Cookie", cookie);
       return json(res, 200, {
         success: true,
         message: "Autenticado com sucesso.",
+        auth_mode: "fixed",
       });
     } catch (error) {
-      const statusCode = Number(error?.statusCode || 400);
-      return json(res, statusCode, {
+      await waitForAuthFailureWindow(startedAtMs);
+      registerAuthAudit(req, {
+        event_type: "login",
+        outcome: "failed",
+        reason: "internal_error",
+      });
+      return json(res, 500, {
         success: false,
-        error: "temporary_auth_login_failed",
-        message: error?.message || "Falha ao processar login.",
+        error: "auth_login_failed",
+        message: "Falha ao processar login.",
       });
     }
   }
 
-  if (req.method === "POST" && pathname === "/api/auth/temp/logout") {
-    if (config.tempAuthEnabled) {
-      res.setHeader("Set-Cookie", buildTempAuthCookie("", req, { clear: true }));
+  if (isAuthLogoutRoute(req, pathname)) {
+    if (!enforceAuthOrigin(req, res)) {
+      return;
     }
+    if (!enforceAuthCsrf(req, res)) {
+      return;
+    }
+    const sessionPayload = resolveAuthSessionPayloadFromRequest(req, config);
+    if (sessionPayload?.sid) {
+      revokeAuthSession(sessionPayload.sid);
+    }
+    registerAuthAudit(req, {
+      event_type: "logout",
+      outcome: "success",
+      reason: "user_logout",
+      email: String(sessionPayload?.email || "").toLowerCase() || null,
+      role: sessionPayload?.role ? normalizeAuthRole(sessionPayload.role) : null,
+      session_id: String(sessionPayload?.sid || ""),
+    });
+    res.setHeader("Set-Cookie", buildAuthCookie("", req, config, { clear: true }));
+    appendSetCookie(res, buildAuthCsrfCookie("", req, { clear: true }));
     return json(res, 200, {
       success: true,
       message: "Sessao encerrada.",
@@ -1292,7 +2135,12 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/api/reprocess/supabase/tables") {
     try {
       const schema = requestUrl.searchParams.get("schema") || "public";
-      const result = await listSupabaseExposedTables(config, schema);
+      const includeAll =
+        String(requestUrl.searchParams.get("include_all") || "").trim().toLowerCase() === "true";
+      const result = await listSupabaseExposedTables(config, schema, {
+        tablePrefix: config.supabaseManagedTablePrefix,
+        managedOnly: !includeAll,
+      });
 
       if (!result.ok) {
         return json(res, 400, {
@@ -1309,6 +2157,10 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         success: true,
         schema: result.schema,
+        managed_prefix: result.managed_prefix || null,
+        managed_only: Boolean(result.managed_only),
+        total_all: Number(result.total_all || result.total || 0),
+        managed_total: Number(result.managed_total || 0),
         total: result.total,
         tables: result.tables,
       });
@@ -1563,6 +2415,11 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/api/config/empresas") {
+    const roleCheck = enforceRouteRole(req, res, config, "operator");
+    if (!roleCheck.ok) {
+      return;
+    }
+
     try {
       const result = readCompaniesConfig();
       return json(res, 200, {
@@ -1581,6 +2438,11 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "PUT" && pathname === "/api/config/empresas") {
+    const roleCheck = enforceRouteRole(req, res, config, "admin");
+    if (!roleCheck.ok) {
+      return;
+    }
+
     try {
       const input = await readJsonBody(req);
       const result = writeCompaniesConfig(input);
@@ -1718,7 +2580,7 @@ const server = createServer(async (req, res) => {
   return json(res, 404, {
     error: "not_found",
       message:
-      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/temp/session, POST /api/auth/temp/login, POST /api/auth/temp/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/health, GET /api/auth/audit, GET /api/auth/session, POST /api/auth/login, POST /api/auth/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
 });
 

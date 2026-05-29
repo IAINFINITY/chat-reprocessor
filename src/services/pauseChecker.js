@@ -133,19 +133,37 @@ export async function resolvePauseTableName(clientConfig, config) {
   const suffix = String(clientConfig?.pauseTableSuffix || "pausar")
     .trim()
     .toLowerCase();
-  const listResult = await listSupabaseExposedTables(config, schema);
+  const managedPrefix = String(config?.supabaseManagedTablePrefix || "").trim();
+  const managedListResult = await listSupabaseExposedTables(config, schema, {
+    tablePrefix: managedPrefix,
+    managedOnly: Boolean(managedPrefix),
+  });
 
-  if (!listResult?.ok || !Array.isArray(listResult.tables)) {
+  if (!managedListResult?.ok || !Array.isArray(managedListResult.tables)) {
     return {
       table: "",
       source: "auto_error",
-      reason: listResult?.error || "list_tables_failed",
+      reason: managedListResult?.error || "list_tables_failed",
     };
   }
 
-  const pauseCandidates = listResult.tables.filter((tableName) =>
+  let candidateSource = "managed_prefix";
+  let pauseCandidates = managedListResult.tables.filter((tableName) =>
     isPauseTableCandidate(tableName, suffix),
   );
+
+  if (pauseCandidates.length === 0) {
+    const fallbackListResult = await listSupabaseExposedTables(config, schema, {
+      tablePrefix: managedPrefix,
+      managedOnly: false,
+    });
+    if (fallbackListResult?.ok && Array.isArray(fallbackListResult.tables)) {
+      pauseCandidates = fallbackListResult.tables.filter((tableName) =>
+        isPauseTableCandidate(tableName, suffix),
+      );
+      candidateSource = "all_tables_fallback";
+    }
+  }
 
   if (pauseCandidates.length === 0) {
     return {
@@ -173,7 +191,7 @@ export async function resolvePauseTableName(clientConfig, config) {
 
   return {
     table: ranked[0].tableName,
-    source: "auto",
+    source: `auto:${candidateSource}`,
     reason: null,
   };
 }
