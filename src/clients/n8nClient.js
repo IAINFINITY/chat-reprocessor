@@ -34,7 +34,7 @@ export function createN8nClient(config = {}) {
 
   async function request(pathname, { method = "GET", query = {}, body = null } = {}) {
     if (!enabled) {
-      throw new Error("Integracao com API do n8n nao configurada.");
+      throw new Error("Integração com API do n8n não configurada.");
     }
 
     const endpoint = `${baseUrl}${pathname}${buildQueryString(query)}`;
@@ -72,7 +72,7 @@ export function createN8nClient(config = {}) {
     } catch (error) {
       if (error?.name === "AbortError") {
         const timeoutError = new Error(
-          `Timeout ao consultar API do n8n apos ${timeoutMs}ms.`,
+          `Timeout ao consultar API do n8n após ${timeoutMs}ms.`,
         );
         timeoutError.details = {
           status_code: null,
@@ -109,7 +109,7 @@ export function createN8nClient(config = {}) {
     async getExecution(executionId, { includeData = true } = {}) {
       const safeId = String(executionId || "").trim();
       if (!safeId) {
-        throw new Error("executionId obrigatorio para consultar execucao no n8n.");
+        throw new Error("executionId obrigatório para consultar execução no n8n.");
       }
 
       return request(`/api/v1/executions/${encodeURIComponent(safeId)}`, {

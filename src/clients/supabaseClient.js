@@ -316,7 +316,7 @@ async function fetchSupabaseOpenApi(config, schema = "public", options = {}) {
     return {
       ok: false,
       error: "supabase_not_configured",
-      message: "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY sao obrigatorios para consultar Supabase.",
+      message: "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios para consultar Supabase.",
     };
   }
 
@@ -361,7 +361,7 @@ async function fetchSupabaseOpenApi(config, schema = "public", options = {}) {
     return {
       ok: false,
       error: "supabase_openapi_invalid_json",
-      message: "OpenAPI do Supabase retornou JSON invalido.",
+      message: "OpenAPI do Supabase retornou JSON inválido.",
       schema: safeSchema,
     };
   }
@@ -463,7 +463,7 @@ export async function describeSupabaseTable(config, { table, schema = "public", 
     return {
       ok: false,
       error: "table_schema_not_found",
-      message: `Nao foi possivel localizar schema OpenAPI da tabela '${safeTable}'.`,
+      message: `Não foi possível localizar schema OpenAPI da tabela '${safeTable}'.`,
       schema: openApiResult.schema,
       table: safeTable,
       schema_key: schemaKey || null,
@@ -554,7 +554,7 @@ export async function inspectSupabaseTableSampleColumns(
     return {
       ok: false,
       error: "supabase_not_configured",
-      message: "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY sao obrigatorios para amostragem.",
+      message: "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios para amostragem.",
       schema: safeSchema,
       table: safeTable,
       columns: [],
@@ -668,7 +668,7 @@ export async function probeSupabaseTableColumns(
     return {
       ok: false,
       error: "supabase_not_configured",
-      message: "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY sao obrigatorios para sondagem.",
+      message: "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios para sondagem.",
       schema: safeSchema,
       table: safeTable,
       existing_columns: [],

@@ -45,13 +45,13 @@ export function resolveConversationIdentity(input, defaultBaseUrl = null) {
 
   if (!accountId || !conversationId) {
     throw new Error(
-      "Nao foi possivel identificar account_id e conversation_id. Envie conversationUrl/chat_url valido ou account_id + conversation_id.",
+      "Não foi possível identificar account_id e conversation_id. Envie conversationUrl/chat_url válido ou account_id + conversation_id.",
     );
   }
 
   if (!baseUrl) {
     throw new Error(
-      "Nao foi possivel identificar CHATWOOT_BASE_URL. Defina no .env ou envie chatwoot_base_url no payload.",
+      "Não foi possível identificar CHATWOOT_BASE_URL. Defina no .env ou envie chatwoot_base_url no payload.",
     );
   }
 

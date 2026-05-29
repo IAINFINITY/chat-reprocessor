@@ -86,12 +86,7 @@ export function getConfig() {
     n8nReconcileEnabled: String(process.env.N8N_RECONCILE_ENABLED || "true").toLowerCase() === "true",
     n8nReconcileDelaysMs,
     n8nExecutionLookbackLimit: Number(process.env.N8N_EXECUTION_LOOKBACK_LIMIT || 40),
-    n8nEventStorePath: String(process.env.N8N_EVENT_STORE_PATH || "data/n8n-events.json").trim(),
     n8nEventStoreMaxEvents: Number(process.env.N8N_EVENT_STORE_MAX_EVENTS || 500),
-    configWriteSecret: String(process.env.CONFIG_WRITE_SECRET || "").trim(),
-    configWriteHeader: String(process.env.CONFIG_WRITE_HEADER || "x-config-secret")
-      .trim()
-      .toLowerCase(),
     authEnabled: String(process.env.AUTH_ENABLED || "false").toLowerCase() === "true",
     authSessionSecret: String(process.env.AUTH_SESSION_SECRET || "").trim(),
     authCookieName: String(process.env.AUTH_COOKIE_NAME || "ia_auth_session").trim(),
@@ -137,6 +132,6 @@ export function assertRequiredConfig(config) {
   }
 
   if (missing.length > 0) {
-    throw new Error(`Variaveis obrigatorias ausentes: ${missing.join(", ")}`);
+    throw new Error(`Variáveis obrigatórias ausentes: ${missing.join(", ")}`);
   }
 }
