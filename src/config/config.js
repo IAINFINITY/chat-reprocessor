@@ -116,6 +116,10 @@ export function assertRequiredConfig(config) {
     missing.push("CHATWOOT_BASE_URL");
   }
 
+  if (!String(process.env.DATABASE_URL || "").trim()) {
+    missing.push("DATABASE_URL");
+  }
+
   if (config.authEnabled) {
     if (!config.supabaseUrl) {
       missing.push("SUPABASE_URL");

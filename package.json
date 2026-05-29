@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/app/server.js",
     "dev": "node --watch src/app/server.js",
+    "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
@@ -23,6 +24,6 @@
     "prisma": "^6.9.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   }
 }
