@@ -1,9 +1,4 @@
-﻿@font-face{font-family:'Nord';font-style:normal;font-weight:400;font-display:swap;src:url('https://iainfinity.com.br/wp-content/uploads/2026/04/NORD-Regular.ttf')format('truetype')}
-@font-face{font-family:'Nord';font-style:normal;font-weight:500;font-display:swap;src:url('https://iainfinity.com.br/wp-content/uploads/2026/04/NORD-Medium.ttf')format('truetype')}
-@font-face{font-family:'Nord';font-style:normal;font-weight:700;font-display:swap;src:url('https://iainfinity.com.br/wp-content/uploads/2026/04/NORD-Bold.ttf')format('truetype')}
-@font-face{font-family:'Geist';font-style:normal;font-weight:400 700;font-display:swap;src:url('https://iainfinity.com.br/wp-content/uploads/2026/04/Geist-VariableFont_wght.ttf')format('truetype')}
-
-:root{
+﻿:root{
   --orange:oklch(62% 0.18 40);
   --orange-hover:oklch(52% 0.17 36);
   --orange-soft:oklch(62% 0.18 40 / 0.12);

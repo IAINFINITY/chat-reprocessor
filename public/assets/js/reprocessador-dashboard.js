@@ -1217,6 +1217,21 @@ function hasConfirmedChatReturn() {
   return Array.isArray(state.chatNewOutgoingMessages) && state.chatNewOutgoingMessages.length > 0;
 }
 
+function hasSuccessEvidenceForActiveRun() {
+  if (hasConfirmedChatReturn()) {
+    return true;
+  }
+
+  if (state.activeRunRequestId) {
+    var status = getHistoryStatusByRequestId(state.activeRunRequestId);
+    if (status === "success") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function getHistoryStatusByRequestId(requestId) {
   var needle = safeText(requestId, "");
   if (!needle) {
@@ -1237,6 +1252,10 @@ function hasActiveRunInProgress() {
     return false;
   }
   return Boolean(state.monitorTimer || state.chatMonitorTimer);
+}
+
+function isAnyMonitorRunning() {
+  return Boolean(state.monitorTimer || state.chatMonitorTimer || state.monitorBusy || state.chatMonitorBusy);
 }
 
 function stopN8nEventsPolling() {
@@ -2461,6 +2480,7 @@ function renderPauseSummary(pausePreview) {
     if (hasEl("removePauseBtn")) {
       el.removePauseBtn.disabled = true;
     }
+    syncExecuteButtonStateFromPreview();
     return;
   }
 
@@ -2496,9 +2516,22 @@ function renderPauseSummary(pausePreview) {
     el.removePauseBtn.disabled = !canRemove;
   }
 
-  if (hasEl("executeBtn") && pauseStatus.paused === true) {
-    el.executeBtn.disabled = true;
+  syncExecuteButtonStateFromPreview();
+}
+
+function syncExecuteButtonStateFromPreview() {
+  if (!hasEl("executeBtn")) {
+    return;
   }
+
+  var hasPreview = Boolean(state.previewPayload && state.previewClientKey);
+  var isPaused = Boolean(
+    state.pauseStatusPreview &&
+      state.pauseStatusPreview.pause_status &&
+      state.pauseStatusPreview.pause_status.paused === true,
+  );
+
+  el.executeBtn.disabled = !hasPreview || isPaused;
 }
 
 async function fetchPauseStatusPreview(options) {
@@ -2658,6 +2691,16 @@ async function removePauseForCurrentPreview() {
 
     const removed = Boolean(data && data.pause_remove && data.pause_remove.removed);
     if (removed) {
+      if (
+        state.pauseStatusPreview &&
+        state.pauseStatusPreview.pause_status &&
+        typeof state.pauseStatusPreview.pause_status === "object"
+      ) {
+        state.pauseStatusPreview.pause_status.paused = false;
+        state.pauseStatusPreview.pause_status.checked = true;
+        state.pauseStatusPreview.pause_status.reason = "removed_manually";
+        state.pauseStatusPreview.pause_status.matched_phone = "";
+      }
       setStatus("Contato removido da IA pausada com sucesso.", false);
       pushActivity(
         "success",
@@ -2674,6 +2717,7 @@ async function removePauseForCurrentPreview() {
       if (hasEl("removePauseBtn")) {
         el.removePauseBtn.textContent = "Removido com sucesso";
       }
+      renderPauseSummary(state.pauseStatusPreview);
     } else {
       setStatus("Contato nao encontrado na tabela de pausa.", true);
       pushActivity(
@@ -2696,6 +2740,7 @@ async function removePauseForCurrentPreview() {
     showToast("Erro de rede ao remover da IA pausada.", "error");
   } finally {
     renderPauseSummary(state.pauseStatusPreview);
+    syncExecuteButtonStateFromPreview();
   }
 }
 
@@ -3259,6 +3304,28 @@ async function fetchLatestN8nExecution(options) {
       if (attempt < attempts) {
         await wait(delayMs);
       }
+    }
+
+    if (hasSuccessEvidenceForActiveRun()) {
+      var fallbackEvent = {
+        category: "n8n_execution_success_fallback",
+        status: "success",
+        title: "Execução concluída",
+        likely_cause: "Retorno do reprocessamento confirmado no Chatwoot.",
+        suggestion: "Se necessário, valide os detalhes finais diretamente no n8n.",
+        request_id: safeText(state.lastDiagnosticContext && state.lastDiagnosticContext.requestId, "") || null,
+        client: safeText(state.lastDiagnosticContext && state.lastDiagnosticContext.client, "") || null,
+        conversation_id: safeText(state.lastDiagnosticContext && state.lastDiagnosticContext.conversationId, "") || null,
+        workflow_name: null,
+        failed_node: null,
+        execution_id: null,
+        upstream_messages: ["Execução confirmada por evidência de retorno no Chatwoot."],
+      };
+      fillFlowStatus(fallbackEvent);
+      if (!silent) {
+        setStatus("Fluxo confirmado pelo retorno no Chatwoot.", false);
+      }
+      return fallbackEvent;
     }
 
     if (!silent) {

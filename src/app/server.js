@@ -161,6 +161,26 @@ function buildAuthCookie(token, req, _config, options = {}) {
   return buildAuthCookieRaw(token, req, options);
 }
 
+function appendSetCookie(res, cookie) {
+  var nextCookie = String(cookie || "").trim();
+  if (!nextCookie) {
+    return;
+  }
+
+  var current = res.getHeader("Set-Cookie");
+  if (!current) {
+    res.setHeader("Set-Cookie", nextCookie);
+    return;
+  }
+
+  if (Array.isArray(current)) {
+    res.setHeader("Set-Cookie", current.concat(nextCookie));
+    return;
+  }
+
+  res.setHeader("Set-Cookie", [String(current), nextCookie]);
+}
+
 async function authenticateSupabasePassword(_config, email, password) {
   return authenticateSupabasePasswordRaw(email, password);
 }
