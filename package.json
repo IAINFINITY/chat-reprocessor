@@ -18,12 +18,13 @@
     "@prisma/client": "^6.9.0",
     "@supabase/supabase-js": "^2.105.4",
     "openai": "^4.104.0",
-    "pg": "^8.21.0"
+    "pg": "^8.21.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "prisma": "^6.9.0"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   }
 }

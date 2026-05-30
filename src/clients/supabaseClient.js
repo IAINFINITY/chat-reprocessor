@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
 
 const OPENAPI_SPEC_CACHE = new Map();
 const DEFAULT_TABLES_CACHE_TTL_MS = 60_000;
@@ -30,10 +31,16 @@ export function createSupabaseAdminClient(config) {
     return null;
   }
 
+  const realtimeTransport =
+    typeof globalThis.WebSocket === "function" ? globalThis.WebSocket : ws;
+
   return createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
+    },
+    realtime: {
+      transport: realtimeTransport,
     },
   });
 }

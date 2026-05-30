@@ -10,6 +10,8 @@ datasource db {
 enum AuthRole {
   admin
   operator
+
+  @@map("reprocess_auth_role")
 }
 
 enum ReprocessStatus {
@@ -20,12 +22,16 @@ enum ReprocessStatus {
   error
   canceled
   timeout
+
+  @@map("reprocess_status")
 }
 
 enum N8nEventType {
   error
   status
   execution
+
+  @@map("reprocess_n8n_event_type")
 }
 
 model AllowedUser {
