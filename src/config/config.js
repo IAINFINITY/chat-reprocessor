@@ -45,9 +45,17 @@ export function loadEnvFile(path = ".env") {
   }
 }
 
+function readEnvString(key, fallback = "") {
+  const raw = process.env[key];
+  if (raw === undefined || raw === null || raw === "") {
+    return String(fallback ?? "");
+  }
+  return parseValue(String(raw)).trim();
+}
+
 export function getConfig() {
   const n8nReconcileDelaysMs = String(
-    process.env.N8N_RECONCILE_DELAYS_MS || "5000,15000,30000",
+    readEnvString("N8N_RECONCILE_DELAYS_MS", "5000,15000,30000"),
   )
     .split(",")
     .map((value) => Number(value.trim()))
@@ -55,53 +63,41 @@ export function getConfig() {
 
   return {
     port: Number(process.env.PORT || 3000),
-    chatwootBaseUrl: (process.env.CHATWOOT_BASE_URL || "").replace(/\/$/, ""),
-    chatwootApiToken: process.env.CHATWOOT_API_ACCESS_TOKEN || "",
-    openaiApiKey: process.env.OPENAI_API_KEY || "",
-    openaiModelName: process.env.OPENAI_MODEL_NAME || "gpt-4o-mini",
-    openaiVisionModelName: process.env.OPENAI_VISION_MODEL_NAME || "gpt-4o-mini",
-    openaiAudioModelName: process.env.OPENAI_AUDIO_MODEL_NAME || "gpt-4o-mini-transcribe",
+    chatwootBaseUrl: readEnvString("CHATWOOT_BASE_URL", "").replace(/\/$/, ""),
+    chatwootApiToken: readEnvString("CHATWOOT_API_ACCESS_TOKEN", ""),
+    openaiApiKey: readEnvString("OPENAI_API_KEY", ""),
+    openaiModelName: readEnvString("OPENAI_MODEL_NAME", "gpt-4o-mini"),
+    openaiVisionModelName: readEnvString("OPENAI_VISION_MODEL_NAME", "gpt-4o-mini"),
+    openaiAudioModelName: readEnvString("OPENAI_AUDIO_MODEL_NAME", "gpt-4o-mini-transcribe"),
     enableMediaAi: String(process.env.ENABLE_MEDIA_AI || "false").toLowerCase() === "true",
-    mediaAudioPromptPath: process.env.MEDIA_AUDIO_PROMPT_PATH || "prompts/media_audio_prompt.txt",
-    mediaImagePromptPath: process.env.MEDIA_IMAGE_PROMPT_PATH || "prompts/media_image_prompt.txt",
-    supabaseUrl: String(process.env.SUPABASE_URL || "").trim(),
-    supabaseAnonKey: String(process.env.SUPABASE_ANON_KEY || "").trim(),
-    supabaseServiceRoleKey: String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim(),
-    supabaseManagedTablePrefix: String(
-      process.env.SUPABASE_MANAGED_TABLE_PREFIX || "REPROCESSAMENTO - ",
-    ).trim(),
+    mediaAudioPromptPath: readEnvString("MEDIA_AUDIO_PROMPT_PATH", "prompts/media_audio_prompt.txt"),
+    mediaImagePromptPath: readEnvString("MEDIA_IMAGE_PROMPT_PATH", "prompts/media_image_prompt.txt"),
+    supabaseUrl: readEnvString("SUPABASE_URL", ""),
+    supabaseAnonKey: readEnvString("SUPABASE_ANON_KEY", ""),
+    supabaseServiceRoleKey: readEnvString("SUPABASE_SERVICE_ROLE_KEY", ""),
+    supabaseManagedTablePrefix: readEnvString("SUPABASE_MANAGED_TABLE_PREFIX", "REPROCESSAMENTO - "),
     pauseCheckTimeoutMs: Number(process.env.PAUSE_CHECK_TIMEOUT_MS || 8000),
     pauseCheckSampleLimit: Number(process.env.PAUSE_CHECK_SAMPLE_LIMIT || 200),
-    n8nErrorCallbackSecret: String(process.env.N8N_ERROR_CALLBACK_SECRET || "").trim(),
-    n8nErrorCallbackHeader: String(
-      process.env.N8N_ERROR_CALLBACK_HEADER || "x-n8n-error-secret",
-    )
+    n8nErrorCallbackSecret: readEnvString("N8N_ERROR_CALLBACK_SECRET", ""),
+    n8nErrorCallbackHeader: readEnvString("N8N_ERROR_CALLBACK_HEADER", "x-n8n-error-secret")
       .trim()
       .toLowerCase(),
-    n8nApiBaseUrl: String(process.env.N8N_API_BASE_URL || "")
-      .trim()
-      .replace(/\/+$/, ""),
-    n8nApiKey: String(process.env.N8N_API_KEY || "").trim(),
+    n8nApiBaseUrl: readEnvString("N8N_API_BASE_URL", "").replace(/\/+$/, ""),
+    n8nApiKey: readEnvString("N8N_API_KEY", ""),
     n8nApiTimeoutMs: Number(process.env.N8N_API_TIMEOUT_MS || 30000),
     n8nReconcileEnabled: String(process.env.N8N_RECONCILE_ENABLED || "true").toLowerCase() === "true",
     n8nReconcileDelaysMs,
     n8nExecutionLookbackLimit: Number(process.env.N8N_EXECUTION_LOOKBACK_LIMIT || 40),
     n8nEventStoreMaxEvents: Number(process.env.N8N_EVENT_STORE_MAX_EVENTS || 500),
     authEnabled: String(process.env.AUTH_ENABLED || "false").toLowerCase() === "true",
-    authSessionSecret: String(process.env.AUTH_SESSION_SECRET || "").trim(),
-    authCookieName: String(process.env.AUTH_COOKIE_NAME || "ia_auth_session").trim(),
+    authSessionSecret: readEnvString("AUTH_SESSION_SECRET", ""),
+    authCookieName: readEnvString("AUTH_COOKIE_NAME", "ia_auth_session"),
     authSessionTtlHours: Number(process.env.AUTH_SESSION_TTL_HOURS || 8),
-    authAllowedUsersTable: String(
-      process.env.AUTH_ALLOWED_USERS_TABLE || "REPROCESSAMENTO - allowed_users",
-    ).trim(),
-    authAllowedUsersEmailColumn: String(
-      process.env.AUTH_ALLOWED_USERS_EMAIL_COLUMN || "email",
-    ).trim(),
-    authAllowedUsersActiveColumn: String(
-      process.env.AUTH_ALLOWED_USERS_ACTIVE_COLUMN || "active",
-    ).trim(),
-    authSignupBlockMode: String(process.env.AUTH_SIGNUP_BLOCK_MODE || "unknown").trim(),
-    authSignupEvidenceNote: String(process.env.AUTH_SIGNUP_EVIDENCE_NOTE || "").trim(),
+    authAllowedUsersTable: readEnvString("AUTH_ALLOWED_USERS_TABLE", "REPROCESSAMENTO - allowed_users"),
+    authAllowedUsersEmailColumn: readEnvString("AUTH_ALLOWED_USERS_EMAIL_COLUMN", "email"),
+    authAllowedUsersActiveColumn: readEnvString("AUTH_ALLOWED_USERS_ACTIVE_COLUMN", "active"),
+    authSignupBlockMode: readEnvString("AUTH_SIGNUP_BLOCK_MODE", "unknown"),
+    authSignupEvidenceNote: readEnvString("AUTH_SIGNUP_EVIDENCE_NOTE", ""),
   };
 }
 

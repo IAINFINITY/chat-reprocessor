@@ -18,7 +18,8 @@ var COMPANY_LOGO_STYLE = {
 
 var HISTORY_STORAGE_KEY = "ia_reprocess_history_v1";
 var ACTIVITY_STORAGE_KEY = "ia_reprocess_activity_v1";
-var FORCE_COMPLETE_RUNNING_AFTER_MS = 90000;
+var FORCE_COMPLETE_RUNNING_AFTER_MS = 180000;
+var N8N_TIMELINE_STRICT_ACTIVE_REQUEST = true;
 var ACTIVITY_MAX_ITEMS = 80;
 var ACTIVITY_PAGE_SIZE = 6;
 var N8N_TIMELINE_PAGE_SIZE = 6;
@@ -1257,6 +1258,29 @@ function getN8nTimelineClient() {
   return "";
 }
 
+function getActiveTimelineRequestFilter() {
+  if (
+    N8N_TIMELINE_STRICT_ACTIVE_REQUEST === true &&
+    isAnyMonitorRunning() &&
+    safeText(state.activeRunRequestId, "")
+  ) {
+    return safeText(state.activeRunRequestId, "");
+  }
+  return safeText(state.n8nFilterRequest, "");
+}
+
+function getForceCompleteRunningAfterMs(clientKey) {
+  var key = normalizeClientKey(clientKey || state.previewClientKey || state.activeRunClientKey || "");
+  var client = (Array.isArray(state.clients) ? state.clients : []).find(function (item) {
+    return normalizeClientKey(item && item.key) === key;
+  });
+  var clientValue = Number(client && client.force_complete_running_after_ms || 0);
+  if (Number.isFinite(clientValue) && clientValue > 0) {
+    return Math.floor(clientValue);
+  }
+  return FORCE_COMPLETE_RUNNING_AFTER_MS;
+}
+
 function toTimelineType(event) {
   var category = safeText(event && event.category, "").toLowerCase();
   var status = safeText(event && event.status, "").toLowerCase();
@@ -1538,16 +1562,11 @@ function buildSyntheticFinalEventsFromHistory(events) {
 function getFilteredN8nEvents() {
   var events = Array.isArray(state.n8nEvents) ? state.n8nEvents : [];
   var timelineBase = buildSyntheticFinalEventsFromHistory(events);
-  var filtered = events.filter(function (event) {
+  var requestFilter = getActiveTimelineRequestFilter();
+  var filtered = timelineBase.filter(function (event) {
     return (
       matchesTypeFilter(event, state.n8nFilterType) &&
-      matchesRequestFilter(event, state.n8nFilterRequest)
-    );
-  });
-  filtered = timelineBase.filter(function (event) {
-    return (
-      matchesTypeFilter(event, state.n8nFilterType) &&
-      matchesRequestFilter(event, state.n8nFilterRequest)
+      matchesRequestFilter(event, requestFilter)
     );
   });
 
@@ -1566,6 +1585,52 @@ function buildN8nEventsFingerprint(events) {
       safeText(event && event.received_at, ""),
     ].join("|");
   }).join("||");
+}
+
+function buildTimelineMergeKey(event) {
+  var row = event && typeof event === "object" ? event : {};
+  var requestId = safeText(row.request_id, "");
+  var category = safeText(row.category, "").toLowerCase();
+  var status = safeText(row.status, "").toLowerCase();
+  var executionId = safeText(row.execution_id, "");
+
+  if (requestId) {
+    if (safeText(row.event_type, "").toLowerCase() === "execution") {
+      return "execution|" + requestId + "|" + status;
+    }
+    if (category === "webhook_dispatched") {
+      return "status|" + requestId + "|webhook_dispatched";
+    }
+    if (category === "n8n_execution_lookup_failed" || category === "n8n_execution_not_found") {
+      return "status|" + requestId + "|" + category;
+    }
+    return safeText(row.event_type, "").toLowerCase() + "|" + requestId + "|" + category + "|" + executionId;
+  }
+
+  return [
+    safeText(row.event_type, "").toLowerCase(),
+    category,
+    executionId,
+    safeText(row.conversation_id, ""),
+    safeText(row.received_at, ""),
+  ].join("|");
+}
+
+function dedupeTimelineEventsPreservingOrder(events) {
+  var rows = Array.isArray(events) ? events : [];
+  var seen = new Set();
+  var output = [];
+
+  rows.forEach(function (event) {
+    var key = buildTimelineMergeKey(event);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    output.push(event);
+  });
+
+  return output;
 }
 
 function pushLocalN8nTimelineEvent(event) {
@@ -1589,7 +1654,7 @@ function pushLocalN8nTimelineEvent(event) {
   var serverEvents = (Array.isArray(state.n8nEvents) ? state.n8nEvents : []).filter(function (item) {
     return safeText(item && item.source, "") !== "local_ui";
   });
-  var merged = state.localN8nEvents.concat(serverEvents);
+  var merged = dedupeTimelineEventsPreservingOrder(state.localN8nEvents.concat(serverEvents));
   state.n8nEvents = merged.slice(0, 100);
   state.n8nEventsFingerprint = buildN8nEventsFingerprint(state.n8nEvents);
   renderN8nEvents();
@@ -1709,10 +1774,14 @@ async function fetchN8nEvents(options) {
   var silent = opts.silent === true;
   var limit = Number(opts.limit || 30);
   var client = opts.client || getN8nTimelineClient();
+  var requestId = safeText(opts.requestId || getActiveTimelineRequestFilter(), "");
   var params = new URLSearchParams();
   params.set("limit", String(Math.max(5, Math.min(limit, 100))));
   if (client) {
     params.set("client", client);
+  }
+  if (requestId) {
+    params.set("request_id", requestId);
   }
 
   try {
@@ -1727,8 +1796,13 @@ async function fetchN8nEvents(options) {
     }
 
     var incoming = Array.isArray(data.events) ? data.events : [];
-    var localEvents = Array.isArray(state.localN8nEvents) ? state.localN8nEvents : [];
-    var combined = localEvents.concat(incoming);
+    var localEvents = (Array.isArray(state.localN8nEvents) ? state.localN8nEvents : []).filter(function (event) {
+      if (!requestId) {
+        return true;
+      }
+      return safeText(event && event.request_id, "") === requestId;
+    });
+    var combined = dedupeTimelineEventsPreservingOrder(localEvents.concat(incoming));
     var fingerprint = buildN8nEventsFingerprint(combined);
     if (fingerprint === state.n8nEventsFingerprint) {
       return;
@@ -1827,6 +1901,10 @@ function resetPreviewState() {
   state.previewMediaMeta = null;
   state.previewClientKey = "";
   state.pauseStatusPreview = null;
+  state.localN8nEvents = [];
+  state.n8nEvents = [];
+  state.n8nEventsFingerprint = "";
+  state.n8nPage = 1;
   stopPreviewProgressTimer();
   if (hasEl("previewProgressWrap")) {
     el.previewProgressWrap.classList.remove("is-visible", "is-error");
@@ -1844,6 +1922,7 @@ function resetPreviewState() {
   }
   setChatPreviewStatus("Aguardando preview da conversa...");
   setPipelineStep(0);
+  renderN8nEvents();
 }
 
 function showCards(hasData) {
@@ -3223,9 +3302,10 @@ function startPostExecuteMonitor() {
       return;
     }
 
+    var forceCompleteAfterMs = getForceCompleteRunningAfterMs(state.activeRunClientKey || state.previewClientKey);
     if (
       state.activeRunStartedAt > 0 &&
-      Date.now() - state.activeRunStartedAt >= FORCE_COMPLETE_RUNNING_AFTER_MS &&
+      Date.now() - state.activeRunStartedAt >= forceCompleteAfterMs &&
       state.activeRunRequestId &&
       getHistoryStatusByRequestId(state.activeRunRequestId) !== "error"
     ) {

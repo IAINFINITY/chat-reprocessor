@@ -5,6 +5,7 @@ export function createAuthRuntime({
   json,
   registerAuthAuditEvent,
   createSupabaseAdminClient,
+  prisma,
 }) {
   const authFailedAttempts = new Map();
   const authCredentialFailedAttempts = new Map();
@@ -23,6 +24,7 @@ export function createAuthRuntime({
     operator: 10,
     admin: 20,
   });
+  const hasPrismaSessionModel = Boolean(prisma && prisma.authSession);
 
   function getClientIp(req) {
     const xForwardedFor = req.headers["x-forwarded-for"];
@@ -559,14 +561,95 @@ export function createAuthRuntime({
     return false;
   }
 
-  function getAuthSessionRecord(sid) {
+  function toAuthSessionDbRole(role) {
+    const normalized = normalizeAuthRole(role);
+    return normalized === "admin" ? "admin" : "operator";
+  }
+
+  async function persistAuthSessionRecord(req, payload, revokedAtMs = 0) {
+    if (!hasPrismaSessionModel) {
+      return;
+    }
+
+    const sid = String(payload?.sid || "").trim();
+    if (!sid) {
+      return;
+    }
+
+    const now = new Date();
+    const expiresAtDate = new Date(Number(payload?.exp || Date.now()));
+    const issuedAtDate = new Date(Number(payload?.iat || Date.now()));
+    const revokedAtDate = revokedAtMs > 0 ? new Date(revokedAtMs) : null;
+    const safeEmail = String(payload?.email || "").trim().toLowerCase();
+    const safeRole = toAuthSessionDbRole(payload?.role);
+
+    try {
+      await prisma.authSession.upsert({
+        where: { sid },
+        create: {
+          sid,
+          userId: String(payload?.sub || "").trim() || null,
+          email: safeEmail,
+          role: safeRole,
+          ip: req ? getClientIp(req) : null,
+          userAgent: req ? String(req.headers["user-agent"] || "").slice(0, 512) : null,
+          issuedAt: issuedAtDate,
+          expiresAt: expiresAtDate,
+          revokedAt: revokedAtDate,
+          lastSeenAt: now,
+        },
+        update: {
+          userId: String(payload?.sub || "").trim() || null,
+          email: safeEmail,
+          role: safeRole,
+          ip: req ? getClientIp(req) : undefined,
+          userAgent: req ? String(req.headers["user-agent"] || "").slice(0, 512) : undefined,
+          issuedAt: issuedAtDate,
+          expiresAt: expiresAtDate,
+          revokedAt: revokedAtDate,
+          lastSeenAt: now,
+        },
+      });
+    } catch {
+      return;
+    }
+  }
+
+  async function getAuthSessionRecord(sid) {
     const safeSid = String(sid || "").trim();
     if (!safeSid) {
       return null;
     }
 
     cleanExpiredAuthSessions();
-    const record = authSessionStore.get(safeSid);
+    let record = authSessionStore.get(safeSid);
+    if (!record && hasPrismaSessionModel) {
+      try {
+        const dbRecord = await prisma.authSession.findUnique({
+          where: { sid: safeSid },
+        });
+        if (dbRecord) {
+          const restored = {
+            sid: safeSid,
+            sub: String(dbRecord.userId || ""),
+            email: String(dbRecord.email || "").toLowerCase(),
+            role: normalizeAuthRole(dbRecord.role),
+            issuedAtMs: dbRecord.issuedAt ? dbRecord.issuedAt.getTime() : Date.now(),
+            expiresAtMs: dbRecord.expiresAt ? dbRecord.expiresAt.getTime() : 0,
+            createdAtMs: dbRecord.createdAt ? dbRecord.createdAt.getTime() : Date.now(),
+            updatedAtMs: dbRecord.updatedAt ? dbRecord.updatedAt.getTime() : Date.now(),
+            revokedAtMs: dbRecord.revokedAt ? dbRecord.revokedAt.getTime() : 0,
+            ip: String(dbRecord.ip || ""),
+            userAgent: String(dbRecord.userAgent || ""),
+          };
+          authSessionStore.set(safeSid, restored);
+          record = restored;
+        }
+      } catch {
+        return null;
+      }
+    }
+
     if (!record) {
       return null;
     }
@@ -583,7 +666,7 @@ export function createAuthRuntime({
     return record;
   }
 
-  function registerAuthSession(req, payload) {
+  async function registerAuthSession(req, payload) {
     const sid = String(payload?.sid || "").trim();
     if (!sid) {
       return;
@@ -602,33 +685,48 @@ export function createAuthRuntime({
       ip: getClientIp(req),
       userAgent: String(req.headers["user-agent"] || "").slice(0, 512),
     });
+    await persistAuthSessionRecord(req, payload, 0);
   }
 
-  function revokeAuthSession(sid) {
+  async function revokeAuthSession(sid) {
     const safeSid = String(sid || "").trim();
     if (!safeSid) {
       return;
     }
 
+    const now = Date.now();
     const existing = authSessionStore.get(safeSid);
-    if (!existing) {
-      return;
+    if (existing) {
+      authSessionStore.set(safeSid, {
+        ...existing,
+        revokedAtMs: now,
+        updatedAtMs: now,
+      });
     }
 
-    authSessionStore.set(safeSid, {
-      ...existing,
-      revokedAtMs: Date.now(),
-      updatedAtMs: Date.now(),
-    });
+    if (hasPrismaSessionModel) {
+      try {
+        await prisma.authSession.updateMany({
+          where: { sid: safeSid },
+          data: {
+            revokedAt: new Date(now),
+            lastSeenAt: new Date(now),
+          },
+        });
+      } catch {
+        return;
+      }
+    }
   }
 
-  function revokeSessionsByEmail(email) {
+  async function revokeSessionsByEmail(email) {
     const targetEmail = String(email || "").trim().toLowerCase();
     if (!targetEmail) {
       return;
     }
 
     cleanExpiredAuthSessions();
+    const now = Date.now();
     for (const [sid, session] of authSessionStore.entries()) {
       if (!session || typeof session !== "object") {
         continue;
@@ -638,9 +736,26 @@ export function createAuthRuntime({
       }
       authSessionStore.set(sid, {
         ...session,
-        revokedAtMs: Date.now(),
-        updatedAtMs: Date.now(),
+        revokedAtMs: now,
+        updatedAtMs: now,
       });
+    }
+
+    if (hasPrismaSessionModel) {
+      try {
+        await prisma.authSession.updateMany({
+          where: {
+            email: targetEmail,
+            revokedAt: null,
+          },
+          data: {
+            revokedAt: new Date(now),
+            lastSeenAt: new Date(now),
+          },
+        });
+      } catch {
+        return;
+      }
     }
   }
 
@@ -654,16 +769,17 @@ export function createAuthRuntime({
     return verifyAuthSessionToken(token);
   }
 
-  function readAuthSessionFromRequest(req) {
+  async function readAuthSessionFromRequest(req) {
     const payload = resolveAuthSessionPayloadFromRequest(req);
     if (!payload) {
       return null;
     }
 
     const sid = String(payload?.sid || "").trim();
-    const record = getAuthSessionRecord(sid);
+    const record = await getAuthSessionRecord(sid);
     if (!record) {
-      return null;
+      await registerAuthSession(req, payload);
+      return payload;
     }
 
     if (
@@ -677,6 +793,14 @@ export function createAuthRuntime({
       ...record,
       updatedAtMs: Date.now(),
     });
+    if (hasPrismaSessionModel) {
+      prisma.authSession
+        .updateMany({
+          where: { sid },
+          data: { lastSeenAt: new Date() },
+        })
+        .catch(() => null);
+    }
 
     return payload;
   }
@@ -853,12 +977,12 @@ export function createAuthRuntime({
     });
   }
 
-  function enforceRouteRole(req, res, requiredRole) {
+  async function enforceRouteRole(req, res, requiredRole) {
     if (!config?.authEnabled) {
       return { ok: true, session: null };
     }
 
-    const session = readAuthSessionFromRequest(req);
+    const session = await readAuthSessionFromRequest(req);
     if (!session) {
       writeAuthUnauthorizedJson(res, 401, "Autenticação obrigatória para acessar este recurso.");
       return { ok: false, session: null };
@@ -885,7 +1009,7 @@ export function createAuthRuntime({
     return { ok: true, session };
   }
 
-  function enforceFixedAuth(req, res, requestUrl) {
+  async function enforceFixedAuth(req, res, requestUrl) {
     const pathname = requestUrl.pathname;
     if (isAuthPublicPath(pathname)) {
       return true;
@@ -901,7 +1025,7 @@ export function createAuthRuntime({
     }
 
     const clientIp = getClientIp(req);
-    const sessionPayload = readAuthSessionFromRequest(req);
+    const sessionPayload = await readAuthSessionFromRequest(req);
     if (sessionPayload) {
       clearAuthFailures(clientIp);
       return true;
@@ -922,11 +1046,11 @@ export function createAuthRuntime({
     return false;
   }
 
-  function enforceAuth(req, res, requestUrl) {
+  async function enforceAuth(req, res, requestUrl) {
     if (!config?.authEnabled) {
       return true;
     }
-    return enforceFixedAuth(req, res, requestUrl);
+    return await enforceFixedAuth(req, res, requestUrl);
   }
 
   return {

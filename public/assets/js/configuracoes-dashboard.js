@@ -334,7 +334,11 @@ async function loadSupabaseTables() {
   var schema = safeText(el.schemaInput.value, "public");
 
   try {
-    var response = await fetch("/api/reprocess/supabase/tables?schema=" + encodeURIComponent(schema));
+    var response = await fetch(
+      "/api/reprocess/supabase/tables?schema=" +
+        encodeURIComponent(schema) +
+        "&include_all=true",
+    );
     var data = await readJsonSafe(response);
     if (!response.ok || !data || !data.success) {
       throw new Error((data && data.message) || "Falha ao carregar tabelas.");

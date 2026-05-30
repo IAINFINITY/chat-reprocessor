@@ -168,6 +168,10 @@ function parsePauseSuffixDefault(env = process.env) {
     .toLowerCase();
 }
 
+function parseForceCompleteRunningAfterMsDefault(env = process.env) {
+  return parsePositiveInteger(env.N8N_FORCE_COMPLETE_RUNNING_AFTER_MS, 180000);
+}
+
 function buildBasePayload({ clientKey, lastUserMessage, contact, conversation }) {
   return {
     message: String(lastUserMessage?.content || ""),
@@ -195,6 +199,7 @@ async function getClientsRegistry(env = process.env) {
   const defaultPauseLookupColumns = parsePauseDefaultLookupColumns(env);
   const defaultPauseAutoDetect = parsePauseAutoDetectDefault(env);
   const defaultPauseSuffix = parsePauseSuffixDefault(env);
+  const defaultForceCompleteRunningAfterMs = parseForceCompleteRunningAfterMsDefault(env);
   const mappings = await listWebhookMappings();
   const clients = {};
 
@@ -250,6 +255,10 @@ async function getClientsRegistry(env = process.env) {
       pauseFlagTrueValues: parseCsvLower(
         env[`${envPrefix}PAUSE_FLAG_TRUE_VALUES`] || "true,1,sim,yes,paused,pausado",
       ),
+      forceCompleteRunningAfterMs: parsePositiveInteger(
+        env[`${envPrefix}FORCE_COMPLETE_RUNNING_AFTER_MS`],
+        defaultForceCompleteRunningAfterMs,
+      ),
       payloadBuilder,
     };
   }
@@ -266,6 +275,7 @@ export async function listReprocessClients() {
     chatwoot_account_ids: client.chatwootAccountIds,
     webhook_configured: Boolean(client.webhookUrl),
     pause_check_configured: Boolean(client.pauseTable || client.pauseAutoDetectTable),
+    force_complete_running_after_ms: Number(client.forceCompleteRunningAfterMs || 0) || 0,
   }));
 }
 
@@ -341,4 +351,3 @@ export async function detectReprocessClientByAccountName(accountName) {
 export function buildClientPayload(clientConfig, context) {
   return clientConfig.payloadBuilder(context);
 }
-

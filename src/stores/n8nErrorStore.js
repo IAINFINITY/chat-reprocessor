@@ -58,7 +58,6 @@ function buildEventDedupeKey(event) {
   const executionId = stableEventText(event?.execution_id);
   const status = stableEventText(event?.status);
   const failedNode = stableEventText(event?.failed_node);
-  const nodesExecuted = Number(event?.nodes_executed || 0) || 0;
   const cause = stableEventText(event?.likely_cause || event?.error_message || event?.error_description);
 
   if (requestId) {
@@ -66,11 +65,18 @@ function buildEventDedupeKey(event) {
       return `${type}|${category}|req:${requestId}`;
     }
 
+    if (category === "n8n_execution_not_found") {
+      return `${type}|${category}|req:${requestId}`;
+    }
+
     if (type === "execution") {
-      return `${type}|${category}|req:${requestId}|status:${status}|exec:${executionId}|node:${failedNode}|nodes:${nodesExecuted}`;
+      return `${type}|${category}|req:${requestId}|status:${status}`;
     }
 
     if (type === "status") {
+      if (category === "webhook_dispatched") {
+        return `${type}|${category}|req:${requestId}`;
+      }
       return `${type}|${category}|req:${requestId}|exec:${executionId}|cause:${cause}`;
     }
 
@@ -494,13 +500,21 @@ export async function getLatestN8nExecutionEvent({ client, conversationId, reque
   return row ? mapFromPrismaRow(row) : null;
 }
 
-export async function listRecentN8nEvents({ limit = 20, client } = {}) {
+export async function listRecentN8nEvents({ limit = 20, client, requestId, conversationId } = {}) {
   const safeLimit = Math.max(1, Math.min(Number(limit || 20), 100));
   const byClient = normalizeClientAlias(client);
+  const byRequestId = String(requestId || "").trim();
+  const byConversationId = String(conversationId || "").trim();
+  const where = {
+    ...(byClient ? { client: byClient } : {}),
+    ...(byRequestId ? { requestId: byRequestId } : {}),
+    ...(byConversationId ? { conversationId: byConversationId } : {}),
+  };
+
   const rows = await prisma.n8nEvent.findMany({
-    where: byClient ? { client: byClient } : {},
+    where,
     orderBy: { receivedAt: "desc" },
-    take: Math.max(safeLimit * 3, 120),
+    take: Math.max(safeLimit * 4, 120),
   });
 
   const source = rows.map(mapFromPrismaRow);

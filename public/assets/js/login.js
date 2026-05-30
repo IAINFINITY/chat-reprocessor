@@ -175,7 +175,13 @@ async function doLogin(event) {
           setTimeout(resolve, MIN_AUTH_LOADING_MS - elapsedError);
         });
       }
-      setError(safeText(data && data.message, "Falha no login. Verifique e-mail e senha."));
+      var baseErrorMessage = safeText(data && data.message, "Falha no login. Verifique e-mail e senha.");
+      var detailCode = safeText(data && data.details && data.details.code, "");
+      var detailErrorId = safeText(data && data.details && data.details.error_id, "");
+      if (detailCode || detailErrorId) {
+        baseErrorMessage += " (" + [detailCode, detailErrorId].filter(Boolean).join(" | ") + ")";
+      }
+      setError(baseErrorMessage);
       showToast("Falha ao autenticar.", "error");
       return;
     }

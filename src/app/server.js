@@ -34,6 +34,7 @@ import { getReprocessClient, listReprocessClients } from "../domain/reprocessCli
 import { reprocessConversation } from "../api/reprocessConversation.js";
 import { listSupabaseExposedTables } from "../clients/supabaseClient.js";
 import { createSupabaseAdminClient } from "../clients/supabaseClient.js";
+import { prisma } from "../clients/prismaClient.js";
 import { findWebhookMappingByAccountName } from "../domain/webhookResolver.js";
 import { inspectPauseConfigForClient } from "../services/pauseChecker.js";
 import {
@@ -101,6 +102,7 @@ const auth = createAuthRuntime({
   json,
   registerAuthAuditEvent,
   createSupabaseAdminClient,
+  prisma,
 });
 
 const {
@@ -139,12 +141,12 @@ const AUTH_CREDENTIAL_MAX_ATTEMPTS = authConstants.AUTH_CREDENTIAL_MAX_ATTEMPTS;
 const AUTH_BLOCK_MS = authConstants.AUTH_BLOCK_MS;
 const AUTH_WINDOW_MS = authConstants.AUTH_WINDOW_MS;
 
-function enforceAuth(req, res, requestUrl, _config) {
-  return enforceAuthRaw(req, res, requestUrl);
+async function enforceAuth(req, res, requestUrl, _config) {
+  return await enforceAuthRaw(req, res, requestUrl);
 }
 
-function enforceRouteRole(req, res, _config, requiredRole) {
-  return enforceRouteRoleRaw(req, res, requiredRole);
+async function enforceRouteRole(req, res, _config, requiredRole) {
+  return await enforceRouteRoleRaw(req, res, requiredRole);
 }
 
 function createAuthSessionToken(_config, sessionData) {
@@ -212,6 +214,138 @@ function toApiErrorResponse(error) {
     },
   };
 }
+
+function classifyAuthLoginInternalError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const causeCode = String(error?.cause?.code || "").toLowerCase();
+  const errorCode = String(error?.code || "").toLowerCase();
+  const errorName = String(error?.name || "").toLowerCase();
+
+  if (message.includes("fetch failed") || message.includes("enotfound") || message.includes("econn")) {
+    return "supabase_network_error";
+  }
+
+  if (message.includes("timed out") || message.includes("timeout") || message.includes("etimedout")) {
+    return "supabase_timeout";
+  }
+
+  if (
+    causeCode === "etimedout" ||
+    causeCode === "econnreset" ||
+    causeCode === "eai_again" ||
+    causeCode === "enotfound"
+  ) {
+    return "supabase_network_error";
+  }
+
+  if ((message.includes("relation") && message.includes("does not exist")) || message.includes("does not exist")) {
+    return "allowlist_table_not_found";
+  }
+
+  if (message.includes("permission denied") || message.includes("not authorized") || message.includes("unauthorized")) {
+    return "allowlist_permission_denied";
+  }
+
+  if (message.includes("invalid url") || message.includes("failed to parse url")) {
+    return "supabase_url_invalid";
+  }
+
+  if (message.includes("connect") || message.includes("socket") || message.includes("econnreset") || message.includes("enotfound")) {
+    return "supabase_network_error";
+  }
+
+  if (errorName.includes("prisma")) {
+    if (errorCode === "p1001") {
+      return "database_unreachable";
+    }
+    if (errorCode === "p1000") {
+      return "database_auth_failed";
+    }
+    if (errorCode === "p2021") {
+      return "database_table_not_found";
+    }
+    if (errorCode === "p2002") {
+      return "database_unique_conflict";
+    }
+    return "database_runtime_error";
+  }
+
+  return "auth_internal_error";
+}
+
+async function runAuthConnectivityChecks(config) {
+  const result = {
+    timestamp: new Date().toISOString(),
+    supabase_auth_password_grant: {
+      ok: false,
+      status_code: null,
+      error: null,
+    },
+    supabase_allowlist_lookup: {
+      ok: false,
+      status_code: null,
+      error: null,
+    },
+  };
+
+  const supabaseUrl = String(config?.supabaseUrl || "").trim().replace(/\/+$/, "");
+  const anonKey = String(config?.supabaseAnonKey || "").trim();
+  const serviceRoleKey = String(config?.supabaseServiceRoleKey || "").trim();
+
+  if (supabaseUrl && anonKey) {
+    try {
+      const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: anonKey,
+        },
+        body: JSON.stringify({
+          email: "__healthcheck__@invalid.local",
+          password: "__invalid__",
+        }),
+      });
+      result.supabase_auth_password_grant.status_code = response.status;
+      result.supabase_auth_password_grant.ok = response.status === 400 || response.status === 401;
+      if (!result.supabase_auth_password_grant.ok) {
+        result.supabase_auth_password_grant.error = `unexpected_status_${response.status}`;
+      }
+    } catch (error) {
+      result.supabase_auth_password_grant.error = String(error?.message || "fetch_failed");
+    }
+  } else {
+    result.supabase_auth_password_grant.error = "missing_supabase_url_or_anon_key";
+  }
+
+  if (supabaseUrl && serviceRoleKey) {
+    try {
+      const adminClient = createSupabaseAdminClient(config);
+      if (!adminClient) {
+        result.supabase_allowlist_lookup.error = "admin_client_unavailable";
+      } else {
+        const table = String(config?.authAllowedUsersTable || "REPROCESSAMENTO - allowed_users").trim();
+        const emailColumn = String(config?.authAllowedUsersEmailColumn || "email").trim();
+        const activeColumn = String(config?.authAllowedUsersActiveColumn || "active").trim();
+        const { error, status } = await adminClient
+          .from(table)
+          .select(`${emailColumn},${activeColumn},role`)
+          .limit(1);
+
+        result.supabase_allowlist_lookup.status_code = Number(status || 200);
+        result.supabase_allowlist_lookup.ok = !error;
+        if (error) {
+          result.supabase_allowlist_lookup.error = String(error?.message || "lookup_failed");
+        }
+      }
+    } catch (error) {
+      result.supabase_allowlist_lookup.error = String(error?.message || "lookup_exception");
+    }
+  } else {
+    result.supabase_allowlist_lookup.error = "missing_supabase_url_or_service_role_key";
+  }
+
+  return result;
+}
 export async function requestHandler(req, res) {
   const requestUrl = getRequestUrl(req);
   const pathname = requestUrl.pathname;
@@ -226,7 +360,7 @@ export async function requestHandler(req, res) {
     });
   }
 
-  if (!enforceAuth(req, res, requestUrl, config)) {
+  if (!(await enforceAuth(req, res, requestUrl, config))) {
     return;
   }
 
@@ -236,7 +370,7 @@ export async function requestHandler(req, res) {
 
   if (req.method === "GET" && pathname === "/login") {
     ensureAuthCsrfCookie(req, res);
-    const hasSession = Boolean(readAuthSessionFromRequest(req, config));
+    const hasSession = Boolean(await readAuthSessionFromRequest(req, config));
     if (hasSession) {
       const nextPath = resolveSafeNextPath(requestUrl.searchParams.get("next"));
       res.writeHead(302, {
@@ -260,7 +394,7 @@ export async function requestHandler(req, res) {
 
   if (isAuthSessionRoute(req, pathname)) {
     const csrfToken = ensureAuthCsrfCookie(req, res);
-    let authSession = readAuthSessionFromRequest(req, config);
+    let authSession = await readAuthSessionFromRequest(req, config);
 
     if (config.authEnabled && authSession?.email) {
       const allowResult = await checkUserAllowed(
@@ -286,7 +420,7 @@ export async function requestHandler(req, res) {
       }
 
         if (authSession?.sid) {
-          revokeAuthSession(authSession.sid);
+          await revokeAuthSession(authSession.sid);
         }
         registerAuthAudit(req, {
           event_type: "session_revoked",
@@ -311,7 +445,7 @@ export async function requestHandler(req, res) {
       const resolvedRole = String(allowResult.role || "operator");
       if (resolvedRole && resolvedRole !== String(authSession.role || "")) {
         if (authSession?.sid) {
-          revokeAuthSession(authSession.sid);
+          await revokeAuthSession(authSession.sid);
         }
 
         const rotatedToken = createAuthSessionToken(config, {
@@ -321,7 +455,7 @@ export async function requestHandler(req, res) {
         });
         const rotatedPayload = verifyAuthSessionToken(rotatedToken, config);
         if (rotatedPayload) {
-          registerAuthSession(req, rotatedPayload);
+          await registerAuthSession(req, rotatedPayload);
           res.setHeader("Set-Cookie", buildAuthCookie(rotatedToken, req, config));
           registerAuthAudit(req, {
             event_type: "session_rotated",
@@ -354,8 +488,11 @@ export async function requestHandler(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/api/auth/health") {
-    const authSession = readAuthSessionFromRequest(req, config);
+    const authSession = await readAuthSessionFromRequest(req, config);
     const auditStats = await getAuthAuditStats();
+    const shouldRunChecks =
+      String(requestUrl.searchParams.get("run_checks") || "").trim().toLowerCase() === "true";
+    const checks = shouldRunChecks ? await runAuthConnectivityChecks(config) : null;
     return json(res, 200, {
       success: true,
       auth_enabled: Boolean(config.authEnabled),
@@ -382,11 +519,12 @@ export async function requestHandler(req, res) {
       },
       audit: auditStats,
       runtime: getAuthRuntimeStats(),
+      checks,
     });
   }
 
   if (req.method === "GET" && pathname === "/api/auth/audit") {
-    const roleCheck = enforceRouteRole(req, res, config, "admin");
+    const roleCheck = await enforceRouteRole(req, res, config, "admin");
     if (!roleCheck.ok) {
       return;
     }
@@ -511,7 +649,7 @@ export async function requestHandler(req, res) {
 
       clearAuthFailures(clientIp);
       clearAuthCredentialFailures(username);
-      revokeSessionsByEmail(username);
+      await revokeSessionsByEmail(username);
       const token = createAuthSessionToken(config, {
         user_id: authResult.user?.id || "",
         email: username,
@@ -534,7 +672,7 @@ export async function requestHandler(req, res) {
           message: "Não foi possível iniciar a sessão.",
         });
       }
-      registerAuthSession(req, payload);
+      await registerAuthSession(req, payload);
       registerAuthAudit(req, {
         event_type: "login",
         outcome: "success",
@@ -552,15 +690,45 @@ export async function requestHandler(req, res) {
       });
     } catch (error) {
       await waitForAuthFailureWindow(startedAtMs);
+      const errorCode = classifyAuthLoginInternalError(error);
+      const errorId = `auth-${Date.now()}`;
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "auth_login_failed_internal",
+          ts: new Date().toISOString(),
+          error_id: errorId,
+          code: errorCode,
+          message: String(error?.message || "unknown"),
+          stack: String(error?.stack || "").slice(0, 4000),
+        }),
+      );
       registerAuthAudit(req, {
         event_type: "login",
         outcome: "failed",
         reason: "internal_error",
+        details: {
+          code: errorCode,
+          error_id: errorId,
+        },
       });
-      return json(res, 500, {
+      const statusCode = [
+        "supabase_network_error",
+        "supabase_timeout",
+        "database_unreachable",
+      ].includes(errorCode)
+        ? 503
+        : 500;
+      return json(res, statusCode, {
         success: false,
         error: "auth_login_failed",
         message: "Falha ao processar login.",
+        details: {
+          code: errorCode,
+          error_id: errorId,
+          debug_message: String(error?.message || "unknown").slice(0, 320),
+          debug_name: String(error?.name || "Error"),
+        },
       });
     }
   }
@@ -574,7 +742,7 @@ export async function requestHandler(req, res) {
     }
     const sessionPayload = resolveAuthSessionPayloadFromRequest(req, config);
     if (sessionPayload?.sid) {
-      revokeAuthSession(sessionPayload.sid);
+      await revokeAuthSession(sessionPayload.sid);
     }
     registerAuthAudit(req, {
       event_type: "logout",
@@ -1141,7 +1309,7 @@ export async function requestHandler(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/api/config/empresas") {
-    const roleCheck = enforceRouteRole(req, res, config, "operator");
+    const roleCheck = await enforceRouteRole(req, res, config, "operator");
     if (!roleCheck.ok) {
       return;
     }
@@ -1164,7 +1332,7 @@ export async function requestHandler(req, res) {
   }
 
   if (req.method === "PUT" && pathname === "/api/config/empresas") {
-    const roleCheck = enforceRouteRole(req, res, config, "admin");
+    const roleCheck = await enforceRouteRole(req, res, config, "admin");
     if (!roleCheck.ok) {
       return;
     }
@@ -1277,9 +1445,13 @@ export async function requestHandler(req, res) {
 
   if (req.method === "GET" && pathname === "/api/reprocess/n8n/events") {
     const client = requestUrl.searchParams.get("client") || "";
+    const requestId = requestUrl.searchParams.get("request_id") || "";
+    const conversationId = requestUrl.searchParams.get("conversation_id") || "";
     const limit = Number(requestUrl.searchParams.get("limit") || 20);
     const events = await listRecentN8nEvents({
       client,
+      requestId,
+      conversationId,
       limit,
     });
 
