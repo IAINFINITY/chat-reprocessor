@@ -63,7 +63,7 @@ function validateCompaniesRows(rows) {
   }
 
   if (rows.length > 500) {
-    throw new Error("Limite excedido. Maximo de 500 empresas por operacao.");
+    throw new Error("Limite excedido. Máximo de 500 empresas por operação.");
   }
 
   const duplicatedNames = new Set();
@@ -92,7 +92,7 @@ function validateCompaniesRows(rows) {
         throw new Error("invalid protocol");
       }
     } catch {
-      throw new Error(`Empresa '${nome}': url_webhook invalida.`);
+      throw new Error(`Empresa '${nome}': url_webhook inválida.`);
     }
 
     if (!tabela) {
@@ -125,9 +125,7 @@ function validateCompaniesRows(rows) {
 }
 
 function mapCompanyRecord(record) {
-  const rawIds = Array.isArray(record?.chatwootAccountIds)
-    ? record.chatwootAccountIds
-    : [];
+  const rawIds = Array.isArray(record?.chatwootAccountIds) ? record.chatwootAccountIds : [];
   const ids = [
     ...new Set(
       rawIds
@@ -142,6 +140,43 @@ function mapCompanyRecord(record) {
     chatwoot_account_ids: ids,
     ativo: Boolean(record?.ativo),
   };
+}
+
+function isTransactionStartTimeout(error) {
+  const code = String(error?.code || "").trim();
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    code === "P2028" ||
+    message.includes("unable to start a transaction") ||
+    message.includes("transaction api error")
+  );
+}
+
+async function writeCompaniesWithoutLongTransaction(empresas) {
+  await prisma.reprocessCompany.updateMany({
+    data: { ativo: false },
+  });
+
+  for (const empresa of empresas) {
+    await prisma.reprocessCompany.upsert({
+      where: { nomeNormalizado: empresa.nome_normalizado },
+      create: {
+        nome: empresa.nome,
+        nomeNormalizado: empresa.nome_normalizado,
+        urlWebhook: empresa.url_webhook,
+        tabela: empresa.tabela,
+        chatwootAccountIds: empresa.chatwoot_account_ids,
+        ativo: true,
+      },
+      update: {
+        nome: empresa.nome,
+        urlWebhook: empresa.url_webhook,
+        tabela: empresa.tabela,
+        chatwootAccountIds: empresa.chatwoot_account_ids,
+        ativo: true,
+      },
+    });
+  }
 }
 
 export async function readCompaniesConfig({ includeInactive = false } = {}) {
@@ -161,13 +196,12 @@ export async function writeCompaniesConfig(input = {}) {
   const empresas = Array.isArray(input?.empresas) ? input.empresas.map(normalizeRow) : [];
   validateCompaniesRows(empresas);
 
-  await prisma.$transaction(async (tx) => {
-    await tx.reprocessCompany.updateMany({
+  const operations = [
+    prisma.reprocessCompany.updateMany({
       data: { ativo: false },
-    });
-
-    for (const empresa of empresas) {
-      await tx.reprocessCompany.upsert({
+    }),
+    ...empresas.map((empresa) =>
+      prisma.reprocessCompany.upsert({
         where: { nomeNormalizado: empresa.nome_normalizado },
         create: {
           nome: empresa.nome,
@@ -184,9 +218,21 @@ export async function writeCompaniesConfig(input = {}) {
           chatwootAccountIds: empresa.chatwoot_account_ids,
           ativo: true,
         },
-      });
+      }),
+    ),
+  ];
+
+  try {
+    await prisma.$transaction(operations, {
+      maxWait: 15_000,
+      timeout: 60_000,
+    });
+  } catch (error) {
+    if (!isTransactionStartTimeout(error)) {
+      throw error;
     }
-  });
+    await writeCompaniesWithoutLongTransaction(empresas);
+  }
 
   return {
     storage: "database",

@@ -124,17 +124,17 @@ function parseN8nErrorPayload(input) {
 
   if (combined.includes("insufficient_quota") || combined.includes("invalid_api_key")) {
     category = "openai_auth_or_quota";
-    title = "OpenAI sem token/credito";
+    title = "OpenAI sem token/crédito";
     likelyCause = "O nó remoto reportou erro de autenticação/quota da OpenAI.";
     suggestion = "Conferir token e faturamento da OpenAI no ambiente do fluxo.";
   } else if (combined.includes("variable") && combined.includes("not found")) {
     category = "workflow_variable_not_found";
-    title = "Variavel ausente no fluxo";
-    likelyCause = "O node tentou acessar uma variavel inexistente no contexto.";
-    suggestion = "Revisar expressoes e variaveis no node com erro dentro do n8n.";
+    title = "Variável ausente no fluxo";
+    likelyCause = "O node tentou acessar uma variável inexistente no contexto.";
+    suggestion = "Revisar expressões e variáveis no node com erro dentro do n8n.";
   } else if (combined.includes("dify")) {
     category = "dify_unavailable";
-    title = "Dify indisponivel";
+    title = "Dify indisponível";
     likelyCause = "Falha de chamada do Dify no workflow.";
     suggestion = "Conferir endpoint, token e status do Dify.";
   } else if (combined.includes("supabase") && /(pause|paused|inativ|disabled)/.test(combined)) {

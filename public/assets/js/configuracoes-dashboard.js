@@ -303,7 +303,7 @@ async function saveCompanies() {
     return;
   }
   try {
-    setSaveFeedback("Salvando configuracao de empresas...", "");
+    setSaveFeedback("Salvando configuração de empresas...", "");
     var payload = {
       empresas: collectCompaniesFromUi(),
     };
@@ -319,8 +319,8 @@ async function saveCompanies() {
     }
     state.companies = Array.isArray(data.empresas) ? data.empresas : [];
     renderCompanies();
-    setStatus("Configuracao de empresas salva com sucesso.", false);
-    setSaveFeedback("Configuracao salva com sucesso.", "success");
+    setStatus("Configuração de empresas salva com sucesso.", false);
+    setSaveFeedback("Configuração salva com sucesso.", "success");
   } catch (error) {
     setStatus("Erro ao salvar: " + safeText(error && error.message, "erro"), true);
     setSaveFeedback("Falha ao salvar: " + safeText(error && error.message, "erro"), "error");
@@ -381,8 +381,7 @@ function renderSupabaseTables() {
   state.filteredTables.forEach(function (tableName) {
     var item = document.createElement("div");
     item.className = "table-item";
-    var shortName = tableName.length > 25 ? tableName.substring(0, 22) + "..." : tableName;
-    item.innerHTML = '<span class="table-icon">DB</span><span class="table-name" title="' + escapeHtml(tableName) + '">' + escapeHtml(shortName) + '</span><button data-action="pick-table" data-table="' + escapeHtml(tableName) + '"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34"/><polygon points="18 2 22 6 12 16 8 16 8 12 18 2"/></svg> Vincular</button>';
+    item.innerHTML = '<span class="table-icon">DB</span><span class="table-name" title="' + escapeHtml(tableName) + '">' + escapeHtml(tableName) + '</span><button data-action="pick-table" data-table="' + escapeHtml(tableName) + '"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34"/><polygon points="18 2 22 6 12 16 8 16 8 12 18 2"/></svg> Vincular</button>';
     el.supabaseTablesList.appendChild(item);
   });
 
@@ -441,7 +440,7 @@ function applySelectedTable(tableName) {
     state.companies[index].tabela = tableName;
   }
   setStatus("Tabela aplicada na empresa selecionada.", false);
-  setSaveFeedback("Tabela aplicada. Clique em 'Salvar configuracao' para persistir.", "");
+  setSaveFeedback("Tabela aplicada. Clique em 'Salvar configuração' para persistir.", "");
 }
 
 onEl("addCompanyBtn", "click", async function () {
@@ -564,7 +563,7 @@ if (hasEl("confirmModal")) {
 
 (function init() {
   if (!hasEl("companiesContainer")) {
-    console.error("[configuracoes-dashboard] Elementos essenciais nao encontrados no DOM. Script em modo degradado.");
+    console.error("[configuracoes-dashboard] Elementos essenciais não encontrados no DOM. Script em modo degradado.");
     return;
   }
   setSaveFeedback("", "");

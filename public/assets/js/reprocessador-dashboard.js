@@ -16,8 +16,6 @@ var COMPANY_LOGO_STYLE = {
   "akila": "ink-dark",
 };
 
-var HISTORY_STORAGE_KEY = "ia_reprocess_history_v1";
-var ACTIVITY_STORAGE_KEY = "ia_reprocess_activity_v1";
 var FORCE_COMPLETE_RUNNING_AFTER_MS = 180000;
 var N8N_TIMELINE_STRICT_ACTIVE_REQUEST = true;
 var ACTIVITY_MAX_ITEMS = 80;
@@ -37,6 +35,8 @@ var state = {
   history: [],
   activity: [],
   historyPage: 1,
+  historyTotalPages: 1,
+  historyTotal: 0,
   activityPage: 1,
   n8nPage: 1,
   n8nEvents: [],
@@ -65,6 +65,7 @@ var state = {
   previewProgressTimer: null,
   previewProgressValue: 0,
   dashboardStats: null,
+  pendingExecutions: [],
 };
 
 var el = {};
@@ -248,25 +249,6 @@ function truncateText(value, maxLen) {
     return text;
   }
   return text.slice(0, Math.max(0, limit - 1)) + "…";
-}
-
-function readStorageJson(key, fallback) {
-  try {
-    var raw = localStorage.getItem(key);
-    if (!raw) {
-      return fallback;
-    }
-    var parsed = JSON.parse(raw);
-    return parsed;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeStorageJson(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
 }
 
 function normalizeLegacyPtBr(value) {
@@ -1845,6 +1827,8 @@ function startN8nEventsPolling() {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") {
       return;
     }
+    fetchExecutionHistory({ page: state.historyPage, silent: true });
+    fetchPendingQueueFromDatabase({ silent: true });
     fetchN8nEvents({ silent: true, limit: 30 });
     fetchDashboardStats({ silent: true });
   }, 15000);
@@ -1952,8 +1936,6 @@ function showCards(hasData) {
   }
 }
 
-var PER_PAGE = 5;
-
 function renderHistory() {
   if (!hasEl("historyBody") || !hasEl("historyPagination")) {
     return;
@@ -1963,22 +1945,18 @@ function renderHistory() {
 
   if (state.history.length === 0) {
     var empty = document.createElement("tr");
-    empty.innerHTML = '<td colspan="6" style="padding:24px;text-align:center;color:var(--muted);font-size:.85rem">Nenhum reprocessamento ainda nesta sessão.</td>';
+    empty.innerHTML = '<td colspan="6" style="padding:24px;text-align:center;color:var(--muted);font-size:.85rem">Nenhum reprocessamento encontrado no banco.</td>';
     el.historyBody.appendChild(empty);
     updateDashboardStats();
     renderQueueControl();
     return;
   }
 
-  var totalPages = Math.max(1, Math.ceil(state.history.length / PER_PAGE));
+  var totalPages = Math.max(1, Number(state.historyTotalPages || 1));
   if (state.historyPage > totalPages) state.historyPage = totalPages;
   if (state.historyPage < 1) state.historyPage = 1;
 
-  var start = (state.historyPage - 1) * PER_PAGE;
-  var end = Math.min(start + PER_PAGE, state.history.length);
-  var pageItems = state.history.slice(start, end);
-
-  pageItems.forEach(function (item) {
+  state.history.forEach(function (item) {
     var tr = document.createElement("tr");
     var normalizedStatus = normalizeHistoryStatus(item.status);
     var statusClass =
@@ -2016,32 +1994,25 @@ function renderHistory() {
     prevBtn.textContent = "< Anterior";
     prevBtn.disabled = state.historyPage <= 1;
     prevBtn.addEventListener("click", function () {
-      if (state.historyPage > 1) { state.historyPage--; renderHistory(); }
+      if (state.historyPage > 1) {
+        fetchExecutionHistory({ page: state.historyPage - 1, silent: true });
+      }
     });
 
     var nextBtn = document.createElement("button");
     nextBtn.textContent = "Próximo >";
     nextBtn.disabled = state.historyPage >= totalPages;
     nextBtn.addEventListener("click", function () {
-      if (state.historyPage < totalPages) { state.historyPage++; renderHistory(); }
+      if (state.historyPage < totalPages) {
+        fetchExecutionHistory({ page: state.historyPage + 1, silent: true });
+      }
     });
 
     var infoSpan = document.createElement("span");
     infoSpan.className = "page-info";
-    infoSpan.textContent = state.historyPage + " / " + totalPages;
+    infoSpan.textContent = state.historyPage + " / " + totalPages + " (" + String(state.historyTotal || 0) + ")";
 
     el.historyPagination.appendChild(prevBtn);
-
-    for (var p = 1; p <= totalPages; p++) {
-      var pageBtn = document.createElement("button");
-      pageBtn.textContent = p;
-      if (p === state.historyPage) pageBtn.className = "active";
-      pageBtn.addEventListener("click", (function (page) {
-        return function () { state.historyPage = page; renderHistory(); };
-      })(p));
-      el.historyPagination.appendChild(pageBtn);
-    }
-
     el.historyPagination.appendChild(infoSpan);
     el.historyPagination.appendChild(nextBtn);
   }
@@ -2108,23 +2079,10 @@ function renderActivity() {
 }
 
 function pushHistory(status, message) {
-  var now = new Date();
-  var item = {
-    id: "RP-" + String(now.getTime()).slice(-6),
-    conversation: getConversationId() || "-",
-    client: state.previewClientKey || "-",
-    status: normalizeHistoryStatus(status),
-    message: safeText(message, "-"),
-    date: now.toLocaleString("pt-BR"),
-    duration: "-",
-    requestId: safeText(state.activeRunRequestId, ""),
-  };
-  state.history.unshift(item);
-  state.historyPage = 1;
-  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
-  renderHistory();
+  fetchExecutionHistory({ page: 1, silent: true });
+  fetchPendingQueueFromDatabase({ silent: true });
   fetchDashboardStats({ silent: true });
-  return item.id;
+  return "db";
 }
 
 function normalizeHistoryStatus(value) {
@@ -2153,9 +2111,7 @@ function isHistoryTerminalStatus(status) {
 }
 
 function getPendingQueueEntries() {
-  return state.history.filter(function (item) {
-    return !isHistoryTerminalStatus(item && item.status);
-  });
+  return Array.isArray(state.pendingExecutions) ? state.pendingExecutions : [];
 }
 
 function hasPendingRunForClient(clientKey) {
@@ -2165,7 +2121,7 @@ function hasPendingRunForClient(clientKey) {
   }
 
   return getPendingQueueEntries().some(function (entry) {
-    return safeText(entry && entry.client, "") === normalizedClient;
+    return normalizeClientKey(safeText(entry && entry.client, "")) === normalizeClientKey(normalizedClient);
   });
 }
 
@@ -2181,7 +2137,7 @@ function renderQueueControl() {
   if (pending.length === 0) {
     var empty = document.createElement("div");
     empty.className = "queue-empty";
-    empty.textContent = "Sem pendências na fila local.";
+    empty.textContent = "Sem pendências no banco.";
     el.queueList.appendChild(empty);
     return;
   }
@@ -2189,11 +2145,11 @@ function renderQueueControl() {
   pending.slice(0, 80).forEach(function (entry) {
     var row = document.createElement("div");
     row.className = "queue-row";
-    row.setAttribute("data-history-id", safeText(entry && entry.id, ""));
+    row.setAttribute("data-pending-id", safeText(entry && entry.id, ""));
 
     var client = formatClientKeyForDisplay(entry && entry.client);
-    var conversation = safeText(entry && entry.conversation, "-");
-    var requestId = safeText(entry && entry.requestId, "-");
+    var conversation = safeText(entry && entry.conversation_id, "-");
+    var requestId = safeText(entry && entry.request_id, "-");
     var status = normalizeHistoryStatus(entry && entry.status);
 
     row.innerHTML =
@@ -2215,69 +2171,65 @@ function removeQueueEntryByHistoryId(historyId) {
     return;
   }
 
-  state.history = state.history.filter(function (item) {
-    return safeText(item && item.id, "") !== needle;
-  });
-
-  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
-  renderHistory();
-  showToast("Item removido da fila local.", "success");
+  fetch("/api/reprocess/executions/pending/remove", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: needle }),
+  })
+    .then(function () {
+      return Promise.all([
+        fetchPendingQueueFromDatabase({ silent: true }),
+        fetchDashboardStats({ silent: true }),
+        fetchExecutionHistory({ page: 1, silent: true }),
+      ]);
+    })
+    .then(function () {
+      showToast("Item removido da fila.", "success");
+    })
+    .catch(function () {
+      showToast("Falha ao remover item da fila.", "error");
+    });
 }
 
 function dedupePendingQueue() {
-  var seen = new Set();
-  var removed = 0;
-
-  state.history = state.history.filter(function (item) {
-    var status = normalizeHistoryStatus(item && item.status);
-    if (isHistoryTerminalStatus(status)) {
-      return true;
-    }
-
-    var key =
-      safeText(item && item.client, "-") +
-      "|" +
-      safeText(item && item.conversation, "-");
-
-    if (seen.has(key)) {
-      removed += 1;
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
-
-  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
-  renderHistory();
-  showToast(
-    removed > 0
-      ? String(removed) + " duplicata(s) removida(s) da fila local."
-      : "Nenhuma duplicata pendente encontrada.",
-    removed > 0 ? "success" : "error",
-  );
+  showToast("Deduplicação local desativada. A fila agora é controlada pelo banco.", "success");
 }
 
 function clearPendingQueue() {
   var pendingBefore = getPendingQueueEntries().length;
-  if (pendingBefore === 0) {
-    showToast("Fila já está vazia.", "error");
-    return;
-  }
-
-  state.history = state.history.filter(function (item) {
-    return isHistoryTerminalStatus(item && item.status);
-  });
-
   state.activeRunRequestId = "";
   state.activeRunStartedAt = 0;
   state.activeRunClientKey = "";
   stopMonitor();
   stopChatMonitor();
-  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
-  renderHistory();
-  setStatus("Pendências da fila local foram limpas.", false);
-  showToast("Fila pendente limpa com sucesso.", "success");
+
+  if (pendingBefore === 0) {
+    fetchDashboardStats({ silent: true });
+    fetchPendingQueueFromDatabase({ silent: true });
+    showToast("Fila já está vazia.", "error");
+    return;
+  }
+
+  fetch("/api/reprocess/executions/pending/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  })
+    .then(function () {
+      return Promise.all([
+        fetchPendingQueueFromDatabase({ silent: true }),
+        fetchDashboardStats({ silent: true }),
+        fetchExecutionHistory({ page: 1, silent: true }),
+      ]);
+    })
+    .then(function () {
+      setStatus("Pendências da fila foram limpas no banco.", false);
+      showToast("Fila pendente limpa com sucesso.", "success");
+    })
+    .catch(function () {
+      setStatus("Falha ao limpar fila pendente no banco.", true);
+      showToast("Falha ao limpar fila.", "error");
+    });
 }
 
 function shouldReplaceHistoryStatus(currentStatus, nextStatus) {
@@ -2320,9 +2272,7 @@ function updateHistoryByRequestId(requestId, status, message) {
   var idx = state.history.findIndex(function (item) {
     return safeText(item && item.requestId, "") === needle;
   });
-  if (idx < 0) {
-    return false;
-  }
+  var normalizedNextStatus = normalizeHistoryStatus(status);
 
   var duration = "-";
   if (state.activeRunStartedAt > 0) {
@@ -2335,29 +2285,34 @@ function updateHistoryByRequestId(requestId, status, message) {
     }
   }
 
-  if (shouldReplaceHistoryStatus(state.history[idx].status, status)) {
-    state.history[idx].status = normalizeHistoryStatus(status);
+  if (idx >= 0) {
+    if (shouldReplaceHistoryStatus(state.history[idx].status, status)) {
+      state.history[idx].status = normalizedNextStatus;
+    }
+    if (safeText(message, "")) {
+      state.history[idx].message = safeText(message, "");
+    }
+    state.history[idx].duration = duration;
   }
-  if (safeText(message, "")) {
-    state.history[idx].message = safeText(message, "");
-  }
-  state.history[idx].duration = duration;
 
   if (
     safeText(state.activeRunRequestId, "") &&
     safeText(state.activeRunRequestId, "") === needle &&
-    isHistoryTerminalStatus(state.history[idx].status)
+    (idx >= 0 ? isHistoryTerminalStatus(state.history[idx].status) : isHistoryTerminalStatus(normalizedNextStatus))
   ) {
     state.activeRunRequestId = "";
     state.activeRunStartedAt = 0;
     state.activeRunClientKey = "";
   }
 
-  writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
   renderHistory();
+  fetchExecutionHistory({ page: state.historyPage, silent: true });
+  fetchPendingQueueFromDatabase({ silent: true });
   fetchDashboardStats({ silent: true });
 
-  var finalizedStatus = normalizeHistoryStatus(state.history[idx] && state.history[idx].status);
+  var finalizedStatus = idx >= 0
+    ? normalizeHistoryStatus(state.history[idx] && state.history[idx].status)
+    : normalizedNextStatus;
   if (
     needle &&
     (finalizedStatus === "success" || finalizedStatus === "error" || finalizedStatus === "paused")
@@ -2368,14 +2323,16 @@ function updateHistoryByRequestId(requestId, status, message) {
       body: JSON.stringify({
         request_id: needle,
         status: finalizedStatus,
-        message: safeText(state.history[idx] && state.history[idx].message, message || ""),
+        message: idx >= 0
+          ? safeText(state.history[idx] && state.history[idx].message, message || "")
+          : safeText(message, ""),
       }),
     })
       .then(function () { return fetchDashboardStats({ silent: true }); })
       .catch(function () { return null; });
   }
 
-  return true;
+  return idx >= 0;
 }
 
 function pushActivity(type, title, desc) {
@@ -2387,7 +2344,6 @@ function pushActivity(type, title, desc) {
   });
   state.activity = state.activity.slice(0, ACTIVITY_MAX_ITEMS);
   state.activityPage = 1;
-  writeStorageJson(ACTIVITY_STORAGE_KEY, state.activity);
   renderActivity();
 }
 
@@ -2513,7 +2469,7 @@ function renderPauseSummary(pausePreview) {
   } else if (pauseStatus.checked === true) {
     statusLabel = "ATIVO";
   } else {
-    statusLabel = "NAO VERIFICADO";
+    statusLabel = "NÃO VERIFICADO";
   }
 
   var table = safeText(pauseStatus.table, "-");
@@ -2673,7 +2629,7 @@ async function removePauseForCurrentPreview() {
   }
 
   if (state.pauseStatusPreview && state.pauseStatusPreview.pause_status && state.pauseStatusPreview.pause_status.paused !== true) {
-    setStatus("Contato nao esta pausado no momento.", true);
+    setStatus("Contato não está pausado no momento.", true);
     return;
   }
 
@@ -2742,10 +2698,10 @@ async function removePauseForCurrentPreview() {
       }
       renderPauseSummary(state.pauseStatusPreview);
     } else {
-      setStatus("Contato nao encontrado na tabela de pausa.", true);
+      setStatus("Contato não encontrado na tabela de pausa.", true);
       pushActivity(
         "warning",
-        "Contato nao encontrado",
+        "Contato não encontrado",
         "Nenhum registro foi removido da tabela de pausa.",
       );
       showToast("Nenhum registro de pausa encontrado para remover.", "error");
@@ -2798,6 +2754,106 @@ function setStatCard(selector, value, percent) {
   if (fillNode) {
     var safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
     fillNode.style.width = safePercent + "%";
+  }
+}
+
+function formatExecutionDuration(row) {
+  var directMs = Number(row && row.duration_ms || 0);
+  var ms = directMs;
+
+  if (!(ms > 0)) {
+    var startedAt = Date.parse(safeText(row && row.started_at, ""));
+    var finishedAt = Date.parse(safeText(row && row.finished_at, ""));
+    if (Number.isFinite(startedAt) && Number.isFinite(finishedAt) && finishedAt >= startedAt) {
+      ms = finishedAt - startedAt;
+    }
+  }
+
+  if (!(ms > 0)) {
+    return "-";
+  }
+
+  var totalSec = Math.floor(ms / 1000);
+  var min = Math.floor(totalSec / 60);
+  var sec = totalSec % 60;
+  return min > 0 ? (min + "m " + String(sec).padStart(2, "0") + "s") : (sec + "s");
+}
+
+function toHistoryViewItem(row) {
+  var item = row && typeof row === "object" ? row : {};
+  var createdAt = safeText(item.created_at, "");
+  var createdDate = createdAt ? new Date(createdAt) : null;
+  var requestId = safeText(item.request_id, "");
+  var idBase = requestId || safeText(item.id, "");
+
+  return {
+    id: idBase ? "RP-" + idBase.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) : "-",
+    conversation: safeText(item.conversation_id, "-"),
+    client: safeText(item.client, "-"),
+    status: normalizeHistoryStatus(item.status),
+    message: safeText(item.error_message, ""),
+    date: createdDate && !Number.isNaN(createdDate.getTime()) ? createdDate.toLocaleString("pt-BR") : "-",
+    duration: formatExecutionDuration(item),
+    requestId: requestId,
+  };
+}
+
+async function fetchExecutionHistory(options) {
+  var opts = options || {};
+  var silent = opts.silent === true;
+  var page = Math.max(1, Number(opts.page || state.historyPage || 1));
+  var perPage = Math.max(1, Math.min(Number(opts.perPage || 20), 100));
+
+  try {
+    var params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("per_page", String(perPage));
+    var response = await fetch("/api/reprocess/executions?" + params.toString());
+    var data = await readJsonSafe(response);
+    if (!response.ok || !data || !data.success) {
+      if (!silent) {
+        setStatus("Falha ao carregar histórico do banco.", true);
+      }
+      return null;
+    }
+
+    var items = Array.isArray(data.items) ? data.items : [];
+    state.history = items.map(toHistoryViewItem);
+    state.historyPage = Math.max(1, Number(data.page || page));
+    state.historyTotalPages = Math.max(1, Number(data.total_pages || 1));
+    state.historyTotal = Math.max(0, Number(data.total || 0));
+    renderHistory();
+    return data;
+  } catch {
+    if (!silent) {
+      setStatus("Erro de rede ao carregar histórico do banco.", true);
+    }
+    return null;
+  }
+}
+
+async function fetchPendingQueueFromDatabase(options) {
+  var opts = options || {};
+  var silent = opts.silent === true;
+  var limit = Math.max(1, Math.min(Number(opts.limit || 150), 300));
+
+  try {
+    var response = await fetch("/api/reprocess/executions/pending?limit=" + String(limit));
+    var data = await readJsonSafe(response);
+    if (!response.ok || !data || !data.success) {
+      if (!silent) {
+        setStatus("Falha ao carregar fila pendente do banco.", true);
+      }
+      return null;
+    }
+    state.pendingExecutions = Array.isArray(data.items) ? data.items : [];
+    renderQueueControl();
+    return data;
+  } catch {
+    if (!silent) {
+      setStatus("Erro de rede ao carregar fila pendente do banco.", true);
+    }
+    return null;
   }
 }
 
@@ -3084,8 +3140,18 @@ function fillN8nDiagnostic(event) {
 
   el.diagnosticPanel.classList.add("is-visible");
   applyDiagnosticTone(toTimelineType(event));
+  var category = safeText(event.category, "").toLowerCase();
+  var status = safeText(event.status, "").toLowerCase();
+  var shouldShowFailedNode =
+    category.indexOf("error") >= 0 ||
+    status === "error" ||
+    status === "failed" ||
+    status === "crashed";
+
   el.dWorkflow.textContent = normalizeLegacyPtBr(safeText(event.workflow_name, "-"));
-  el.dNode.textContent = normalizeLegacyPtBr(safeText(event.failed_node, "-"));
+  el.dNode.textContent = shouldShowFailedNode
+    ? normalizeLegacyPtBr(safeText(event.failed_node, "-"))
+    : "-";
   el.dExecution.textContent = normalizeLegacyPtBr(safeText(event.execution_id, "-"));
   el.dFlowMessage.textContent =
     normalizeLegacyPtBr(stripJsonFromText(event.error_description)) ||
@@ -3196,8 +3262,16 @@ function fillFlowStatus(event) {
   el.dSuggestion.textContent = safeText(event.suggestion, "-");
   el.dUpstream.textContent = (event.upstream_messages && event.upstream_messages[0]) || "-";
   el.dRequest.textContent = safeText(event.request_id, "-");
+  var category = safeText(event.category, "").toLowerCase();
+  var status = safeText(event.status, "").toLowerCase();
+  var shouldShowFailedNode =
+    category.indexOf("error") >= 0 ||
+    status === "error" ||
+    status === "failed" ||
+    status === "crashed";
+
   el.dWorkflow.textContent = safeText(event.workflow_name, "-");
-  el.dNode.textContent = safeText(event.failed_node, "-");
+  el.dNode.textContent = shouldShowFailedNode ? safeText(event.failed_node, "-") : "-";
   el.dExecution.textContent = safeText(event.execution_id, "-");
   var mainFlowMessage =
     (event.upstream_messages && event.upstream_messages[0]) ||
@@ -3542,6 +3616,7 @@ async function executeReprocess() {
     renderPauseWarning(state.pauseStatusPreview.pause_status);
     return;
   }
+  await fetchPendingQueueFromDatabase({ silent: true });
   if (hasPendingRunForClient(state.previewClientKey)) {
     setStatus(
       "Já existe reprocessamento pendente para " +
@@ -3765,8 +3840,13 @@ onEl("removePauseBtn", "click", async function () {
   removePauseForCurrentPreview();
 });
 onEl("refreshHistory", "click", function () {
-  renderHistory();
-  setStatus("Histórico local atualizado.", false);
+  Promise.all([
+    fetchExecutionHistory({ page: 1, silent: true }),
+    fetchPendingQueueFromDatabase({ silent: true }),
+    fetchDashboardStats({ silent: true }),
+  ]).then(function () {
+    setStatus("Histórico atualizado a partir do banco.", false);
+  });
 });
 onEl("queueDedupeBtn", "click", function () {
   dedupePendingQueue();
@@ -3775,7 +3855,7 @@ onEl("queueClearBtn", "click", async function () {
   var confirmed = true;
   if (typeof window.openConfirmModal === "function") {
     confirmed = await window.openConfirmModal(
-      "Deseja limpar todas as pendências da fila local?",
+      "Deseja cancelar todas as pendências da fila no banco?",
     );
   }
   if (!confirmed) {
@@ -3859,23 +3939,11 @@ onEl("n8nLookupBtn", "click", function () {
 
 (function init() {
   if (!hasEl("conversationUrl") || !hasEl("clientSelect")) {
-    console.error("[reprocessador-dashboard] Elementos essenciais nao encontrados no DOM. Script em modo degradado.");
+    console.error("[reprocessador-dashboard] Elementos essenciais não encontrados no DOM. Script em modo degradado.");
     return;
   }
   showCards(false);
   resetPreviewState();
-  var persistedHistory = readStorageJson(HISTORY_STORAGE_KEY, []);
-  if (Array.isArray(persistedHistory)) {
-    state.history = persistedHistory.filter(function (item) {
-      return item && typeof item === "object";
-    }).slice(0, 200);
-  }
-  var persistedActivity = readStorageJson(ACTIVITY_STORAGE_KEY, []);
-  if (Array.isArray(persistedActivity)) {
-    state.activity = persistedActivity.filter(function (item) {
-      return item && typeof item === "object";
-    }).slice(0, ACTIVITY_MAX_ITEMS);
-  }
   renderHistory();
   renderActivity();
   el.n8nTypeFilter.value = "all";
@@ -3887,6 +3955,8 @@ onEl("n8nLookupBtn", "click", function () {
     var normalizedCount = parseMessageCount();
     el.messageCount.value = String(normalizedCount > 0 ? normalizedCount : 1);
   }
+  fetchExecutionHistory({ page: 1, silent: true });
+  fetchPendingQueueFromDatabase({ silent: true });
   fetchN8nEvents({ silent: true, limit: 30 });
   fetchDashboardStats({ silent: true });
   startN8nEventsPolling();

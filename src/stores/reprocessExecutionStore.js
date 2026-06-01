@@ -2,6 +2,14 @@ import { prisma } from "../clients/prismaClient.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+function toPositiveInt(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return fallback;
+  }
+  return Math.floor(n);
+}
+
 function toInt(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -299,6 +307,7 @@ export async function getReprocessDashboardStats() {
     prisma.reprocessExecution.count({
       where: {
         status: { in: ["pending", "running"] },
+        finishedAt: null,
       },
     }),
     prisma.reprocessExecution.findMany({
@@ -315,5 +324,105 @@ export async function getReprocessDashboardStats() {
     failed_30d: failedCount,
     pending_now: pendingCount,
     active_clients_30d: activeClients.length,
+  };
+}
+
+export async function listReprocessExecutions({ page = 1, perPage = 20 } = {}) {
+  const safePage = toPositiveInt(page, 1);
+  const safePerPage = Math.max(1, Math.min(toPositiveInt(perPage, 20), 100));
+  const skip = (safePage - 1) * safePerPage;
+
+  const [total, rows] = await Promise.all([
+    prisma.reprocessExecution.count(),
+    prisma.reprocessExecution.findMany({
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: safePerPage,
+    }),
+  ]);
+
+  return {
+    page: safePage,
+    per_page: safePerPage,
+    total,
+    total_pages: Math.max(1, Math.ceil(total / safePerPage)),
+    items: rows.map((row) => ({
+      id: row.id,
+      request_id: row.requestId || null,
+      conversation_id: row.conversationId || null,
+      client: row.client,
+      status: row.status,
+      created_at: row.createdAt ? row.createdAt.toISOString() : null,
+      started_at: row.startedAt ? row.startedAt.toISOString() : null,
+      finished_at: row.finishedAt ? row.finishedAt.toISOString() : null,
+      duration_ms: row.durationMs || null,
+      error_message: row.errorMessage || null,
+    })),
+  };
+}
+
+export async function listPendingExecutions({ limit = 100 } = {}) {
+  const safeLimit = Math.max(1, Math.min(toPositiveInt(limit, 100), 300));
+  const rows = await prisma.reprocessExecution.findMany({
+    where: {
+      status: { in: ["pending", "running"] },
+      finishedAt: null,
+    },
+    orderBy: { createdAt: "desc" },
+    take: safeLimit,
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    request_id: row.requestId || null,
+    conversation_id: row.conversationId || null,
+    client: row.client,
+    status: row.status,
+    created_at: row.createdAt ? row.createdAt.toISOString() : null,
+  }));
+}
+
+export async function cancelPendingExecutionById({ id, reason = "queue_removed_by_operator" } = {}) {
+  const safeId = String(id || "").trim();
+  if (!safeId) {
+    return { updated: 0 };
+  }
+
+  const updated = await prisma.reprocessExecution.updateMany({
+    where: {
+      id: safeId,
+      status: { in: ["pending", "running"] },
+      finishedAt: null,
+    },
+    data: {
+      status: "canceled",
+      finishedAt: new Date(),
+      errorCode: "queue_canceled",
+      errorMessage: String(reason || "").trim() || "Execução cancelada no painel.",
+    },
+  });
+
+  return {
+    updated: Number(updated?.count || 0),
+    id: safeId,
+  };
+}
+
+export async function cancelAllPendingExecutions({ reason = "queue_cleared_by_operator" } = {}) {
+  const updated = await prisma.reprocessExecution.updateMany({
+    where: {
+      status: { in: ["pending", "running"] },
+      finishedAt: null,
+    },
+    data: {
+      status: "canceled",
+      finishedAt: new Date(),
+      errorCode: "queue_cleared",
+      errorMessage: String(reason || "").trim() || "Execuções pendentes canceladas no painel.",
+    },
+  });
+
+  return {
+    updated: Number(updated?.count || 0),
   };
 }

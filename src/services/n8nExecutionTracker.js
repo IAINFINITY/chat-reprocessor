@@ -177,21 +177,22 @@ function toExecutionStatusEvent(execution, context = {}) {
     safeString(execution?.workflowId) || safeString(execution?.workflowData?.id) || null;
   const executionId = safeString(execution?.id) || null;
   const lastNode = pickLastExecutedNode(executionData, execution?.lastNodeExecuted);
+  const hasFailureNode = status === "error" || status === "failed" || status === "crashed";
   const nodesExecuted = countExecutedNodes(executionData);
   const likelyCause =
     status === "success"
       ? `Fluxo concluído com ${nodesExecuted} nó(s) executado(s).`
       : status === "running"
         ? `Fluxo ainda em andamento (${nodesExecuted} nó(s) executado(s) até agora).`
-        : status === "error" || status === "failed" || status === "crashed"
+        : hasFailureNode
           ? "Fluxo falhou durante a execução."
           : "A execução foi localizada, mas sem status conclusivo.";
 
   const suggestion =
     status === "success"
-      ? "Se o resultado final não era esperado, abrir a execução no n8n para validar os dados de entrada."
+      ? "Se o resultado final não era esperado, abra a execução no n8n para validar os dados de entrada."
       : status === "running"
-        ? "Aguardar finalizacao do fluxo ou consultar novamente em alguns segundos."
+        ? "Aguardar finalização do fluxo ou consultar novamente em alguns segundos."
         : "Abrir a execução no n8n e revisar o nó com falha.";
 
   return {
@@ -205,7 +206,7 @@ function toExecutionStatusEvent(execution, context = {}) {
     workflow_id: workflowId,
     execution_id: executionId,
     execution_url: null,
-    failed_node: lastNode,
+    failed_node: hasFailureNode ? lastNode : null,
     n8n_http_code: null,
     error_message: null,
     error_description: null,

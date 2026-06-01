@@ -44,13 +44,13 @@
 .supabase-controls .field input:focus,.supabase-controls .field select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
 .list-scroll{border:1px solid var(--border);border-radius:0 0 var(--radius-md) var(--radius-md);background:var(--surface);max-height:360px;overflow:auto;transition:border-color var(--transition)}
 .list-scroll:hover{border-color:var(--border-strong)}
-.table-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);transition:background var(--transition),padding var(--transition)}
+.table-item{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);transition:background var(--transition),padding var(--transition)}
 .table-item:last-child{border-bottom:none}
 .table-item:hover{background:var(--accent-subtle);padding-left:18px}
 .table-item .table-icon{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);background:var(--accent-soft);color:var(--accent);flex-shrink:0;font-size:.6rem;font-weight:700;font-family:var(--font-mono)}
 .table-item button{border:1px solid var(--border);background:var(--surface);color:var(--accent);border-radius:var(--radius-sm);font-size:.66rem;padding:4px 10px;cursor:pointer;white-space:nowrap;transition:all var(--transition);font-weight:500;display:inline-flex;align-items:center;gap:4px}
 .table-item button:hover{border-color:var(--accent);background:var(--accent-soft)}
-.table-name{font-size:.74rem;color:var(--fg);font-family:var(--font-mono);word-break:break-word;flex:1}
+.table-name{font-size:.74rem;color:var(--fg);font-family:var(--font-mono);word-break:break-word;white-space:normal;line-height:1.35;flex:1;min-width:0}
 .config-empty{padding:22px 14px;color:var(--muted);font-size:.74rem;text-align:center;border:1px dashed var(--border);border-radius:var(--radius-md);background:var(--bg-alt);line-height:1.5}
 .config-feedback{margin-top:8px;min-height:16px;font-size:.74rem;color:var(--muted);padding:0 2px}
 .config-feedback.success{color:var(--success)}

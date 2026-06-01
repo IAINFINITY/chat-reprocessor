@@ -25,8 +25,12 @@ import {
   registerWebhookDispatchEvent,
 } from "../stores/n8nErrorStore.js";
 import {
+  cancelAllPendingExecutions,
+  cancelPendingExecutionById,
   finalizeExecutionByRequestId,
   getReprocessDashboardStats,
+  listPendingExecutions,
+  listReprocessExecutions,
   registerExecutionDispatch,
   registerExecutionFailure,
   registerExecutionSkipped,
@@ -1467,7 +1471,7 @@ export async function requestHandler(req, res) {
           category: "n8n_execution_lookup_failed",
           title: "Falha ao consultar execução no n8n",
           likely_cause: error?.message || "Falha não identificada ao consultar API do n8n.",
-          suggestion: "Validar variaveis de ambiente da API do n8n e tentar novamente.",
+          suggestion: "Validar variáveis de ambiente da API do n8n e tentar novamente.",
           request_id: requestId || null,
           client: client || null,
           conversation_id: conversationId || null,
@@ -1525,6 +1529,83 @@ export async function requestHandler(req, res) {
     }
   }
 
+  if (req.method === "GET" && pathname === "/api/reprocess/executions") {
+    try {
+      const page = Number(requestUrl.searchParams.get("page") || 1);
+      const perPage = Number(requestUrl.searchParams.get("per_page") || 20);
+      const result = await listReprocessExecutions({ page, perPage });
+      return json(res, 200, {
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "executions_list_failed",
+        message: error?.message || "Falha ao listar execuções.",
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/reprocess/executions/pending") {
+    try {
+      const limit = Number(requestUrl.searchParams.get("limit") || 100);
+      const items = await listPendingExecutions({ limit });
+      return json(res, 200, {
+        success: true,
+        total: items.length,
+        items,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "pending_executions_list_failed",
+        message: error?.message || "Falha ao listar pendências.",
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/executions/pending/remove") {
+    try {
+      const input = await readJsonBody(req);
+      const id = String(input?.id || "").trim();
+      if (!id) {
+        return json(res, 400, {
+          success: false,
+          error: "id_required",
+          message: "Informe o id da execução pendente para remover.",
+        });
+      }
+      const result = await cancelPendingExecutionById({ id });
+      return json(res, 200, {
+        success: true,
+        result,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "pending_execution_remove_failed",
+        message: error?.message || "Falha ao remover execução pendente.",
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/executions/pending/clear") {
+    try {
+      const result = await cancelAllPendingExecutions();
+      return json(res, 200, {
+        success: true,
+        result,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "pending_executions_clear_failed",
+        message: error?.message || "Falha ao limpar execuções pendentes.",
+      });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/reprocess/executions/finalize-local") {
     try {
       const input = await readJsonBody(req);
@@ -1575,7 +1656,7 @@ export async function requestHandler(req, res) {
   return json(res, 404, {
     error: "not_found",
       message:
-      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/health, GET /api/auth/audit, GET /api/auth/session, POST /api/auth/login, POST /api/auth/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, GET /api/reprocess/stats, POST /api/reprocess/executions/finalize-local, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/health, GET /api/auth/audit, GET /api/auth/session, POST /api/auth/login, POST /api/auth/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, GET /api/reprocess/stats, GET /api/reprocess/executions, GET /api/reprocess/executions/pending, POST /api/reprocess/executions/pending/remove, POST /api/reprocess/executions/pending/clear, POST /api/reprocess/executions/finalize-local, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
 }
 
