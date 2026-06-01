@@ -64,6 +64,7 @@ var state = {
   activeRunClientKey: "",
   previewProgressTimer: null,
   previewProgressValue: 0,
+  dashboardStats: null,
 };
 
 var el = {};
@@ -1845,6 +1846,7 @@ function startN8nEventsPolling() {
       return;
     }
     fetchN8nEvents({ silent: true, limit: 30 });
+    fetchDashboardStats({ silent: true });
   }, 15000);
 }
 
@@ -2121,6 +2123,7 @@ function pushHistory(status, message) {
   state.historyPage = 1;
   writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
   renderHistory();
+  fetchDashboardStats({ silent: true });
   return item.id;
 }
 
@@ -2352,6 +2355,26 @@ function updateHistoryByRequestId(requestId, status, message) {
 
   writeStorageJson(HISTORY_STORAGE_KEY, state.history.slice(0, 200));
   renderHistory();
+  fetchDashboardStats({ silent: true });
+
+  var finalizedStatus = normalizeHistoryStatus(state.history[idx] && state.history[idx].status);
+  if (
+    needle &&
+    (finalizedStatus === "success" || finalizedStatus === "error" || finalizedStatus === "paused")
+  ) {
+    fetch("/api/reprocess/executions/finalize-local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: needle,
+        status: finalizedStatus,
+        message: safeText(state.history[idx] && state.history[idx].message, message || ""),
+      }),
+    })
+      .then(function () { return fetchDashboardStats({ silent: true }); })
+      .catch(function () { return null; });
+  }
+
   return true;
 }
 
@@ -2778,34 +2801,68 @@ function setStatCard(selector, value, percent) {
   }
 }
 
+async function fetchDashboardStats(options) {
+  var opts = options || {};
+  var silent = opts.silent === true;
+
+  try {
+    var response = await fetch("/api/reprocess/stats");
+    var data = await readJsonSafe(response);
+
+    if (!response.ok || !data || !data.success || !data.stats) {
+      if (!silent) {
+        setStatus("Falha ao carregar métricas do banco.", true);
+      }
+      return null;
+    }
+
+    state.dashboardStats = data.stats;
+    updateDashboardStats();
+    return data.stats;
+  } catch {
+    if (!silent) {
+      setStatus("Erro de rede ao carregar métricas do banco.", true);
+    }
+    return null;
+  }
+}
+
 function updateDashboardStats() {
   var successCount = 0;
   var errorCount = 0;
   var pendingCount = 0;
 
-  state.history.forEach(function (item) {
-    var status = safeText(item && item.status, "").toLowerCase();
-    if (status === "success") {
-      successCount += 1;
-      return;
-    }
-    if (status === "error" || status === "failed") {
-      errorCount += 1;
-      return;
-    }
-    pendingCount += 1;
-  });
+  if (state.dashboardStats && typeof state.dashboardStats === "object") {
+    successCount = Math.max(0, Number(state.dashboardStats.success_30d || 0));
+    errorCount = Math.max(0, Number(state.dashboardStats.failed_30d || 0));
+    pendingCount = Math.max(0, Number(state.dashboardStats.pending_now || 0));
+  } else {
+    state.history.forEach(function (item) {
+      var status = safeText(item && item.status, "").toLowerCase();
+      if (status === "success") {
+        successCount += 1;
+        return;
+      }
+      if (status === "error" || status === "failed") {
+        errorCount += 1;
+        return;
+      }
+      pendingCount += 1;
+    });
+  }
 
   var total = Math.max(1, successCount + errorCount + pendingCount);
   var successPercent = Math.round((successCount / total) * 100);
   var errorPercent = Math.round((errorCount / total) * 100);
   var pendingPercent = Math.round((pendingCount / total) * 100);
   var clientsCount = Array.isArray(state.clients) ? state.clients.length : 0;
-  var uniqueClientsInHistory = new Set(
-    state.history
-      .map(function (item) { return safeText(item && item.client, ""); })
-      .filter(function (key) { return key && key !== "-"; }),
-  ).size;
+  var uniqueClientsInHistory = state.dashboardStats && typeof state.dashboardStats === "object"
+    ? Math.max(0, Number(state.dashboardStats.active_clients_30d || 0))
+    : new Set(
+      state.history
+        .map(function (item) { return safeText(item && item.client, ""); })
+        .filter(function (key) { return key && key !== "-"; }),
+    ).size;
   var clientsPercent = clientsCount > 0
     ? Math.round(Math.min(100, (uniqueClientsInHistory / clientsCount) * 100))
     : 0;
@@ -3831,6 +3888,7 @@ onEl("n8nLookupBtn", "click", function () {
     el.messageCount.value = String(normalizedCount > 0 ? normalizedCount : 1);
   }
   fetchN8nEvents({ silent: true, limit: 30 });
+  fetchDashboardStats({ silent: true });
   startN8nEventsPolling();
   loadClients();
   window.scrollTo({ top: 0, left: 0, behavior: "auto" });

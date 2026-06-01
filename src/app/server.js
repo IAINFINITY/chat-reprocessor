@@ -25,6 +25,14 @@ import {
   registerWebhookDispatchEvent,
 } from "../stores/n8nErrorStore.js";
 import {
+  finalizeExecutionByRequestId,
+  getReprocessDashboardStats,
+  registerExecutionDispatch,
+  registerExecutionFailure,
+  registerExecutionSkipped,
+  syncExecutionStatusFromN8nEvent,
+} from "../stores/reprocessExecutionStore.js";
+import {
   configureAuthAuditStore,
   getAuthAuditStats,
   listAuthAuditEvents,
@@ -1161,6 +1169,10 @@ export async function requestHandler(req, res) {
       input = await readJsonBody(req);
       const result = await executeReprocessWebhook({ input, config });
 
+      if (result?.success && result?.skipped && result?.status === "paused") {
+        await registerExecutionSkipped({ result, input });
+      }
+
       if (result?.success && result?.request_id) {
         const conversationId =
           String(result?.conversation_id || "").trim() ||
@@ -1181,14 +1193,17 @@ export async function requestHandler(req, res) {
           httpStatusCode: result?.webhook_http_status || null,
         });
 
+        await registerExecutionDispatch({ result, input });
+
         scheduleExecutionReconciliation({
           config,
           context: requestContext,
           onEvent: async (event) => {
             await registerN8nExecutionEvent(event);
+            await syncExecutionStatusFromN8nEvent(event);
           },
           onFailure: async (error) => {
-            await registerN8nStatusEvent({
+            const statusEvent = await registerN8nStatusEvent({
               category: "n8n_execution_lookup_failed",
               title: "Falha ao consultar execução no n8n",
               likely_cause: error?.message || "Falha não identificada ao consultar API do n8n.",
@@ -1197,6 +1212,7 @@ export async function requestHandler(req, res) {
               client: requestContext.client,
               conversation_id: requestContext.conversationId || null,
             });
+            await syncExecutionStatusFromN8nEvent(statusEvent);
           },
         });
       }
@@ -1211,6 +1227,9 @@ export async function requestHandler(req, res) {
           .toLowerCase(),
         conversationId: extractConversationIdFromExecuteInput(input),
       }, getLatestN8nErrorEvent);
+      if (Number(formatted.statusCode || 0) >= 500) {
+        await registerExecutionFailure({ input, formattedBody: formatted.body });
+      }
       return json(res, formatted.statusCode, formatted.body);
     }
   }
@@ -1245,6 +1264,10 @@ export async function requestHandler(req, res) {
           ? { ...input, client: input.client || hintedClient }
           : input;
       const event = await registerN8nErrorEvent(normalizedInput);
+      await syncExecutionStatusFromN8nEvent({
+        ...event,
+        status: "error",
+      });
 
       return json(res, 200, {
         success: true,
@@ -1296,6 +1319,7 @@ export async function requestHandler(req, res) {
           ? { ...input, client: input.client || hintedClient }
           : input;
       const event = await registerN8nStatusEvent(normalizedInput);
+      await syncExecutionStatusFromN8nEvent(event);
 
       return json(res, 200, {
         success: true,
@@ -1425,8 +1449,9 @@ export async function requestHandler(req, res) {
 
         if (reconciled.ok && reconciled.event) {
           event = await registerN8nExecutionEvent(reconciled.event);
+          await syncExecutionStatusFromN8nEvent(event);
         } else if (!event) {
-          await registerN8nStatusEvent({
+          const statusEvent = await registerN8nStatusEvent({
             category: "n8n_execution_not_found",
             title: "Execução ainda não localizada no n8n",
             likely_cause: "A execução pode ainda não ter sido indexada na API do n8n.",
@@ -1435,9 +1460,10 @@ export async function requestHandler(req, res) {
             client: client || null,
             conversation_id: conversationId || null,
           });
+          await syncExecutionStatusFromN8nEvent(statusEvent);
         }
       } catch (error) {
-        await registerN8nStatusEvent({
+        const statusEvent = await registerN8nStatusEvent({
           category: "n8n_execution_lookup_failed",
           title: "Falha ao consultar execução no n8n",
           likely_cause: error?.message || "Falha não identificada ao consultar API do n8n.",
@@ -1446,6 +1472,7 @@ export async function requestHandler(req, res) {
           client: client || null,
           conversation_id: conversationId || null,
         });
+        await syncExecutionStatusFromN8nEvent(statusEvent);
       }
 
       if (
@@ -1482,6 +1509,56 @@ export async function requestHandler(req, res) {
     });
   }
 
+  if (req.method === "GET" && pathname === "/api/reprocess/stats") {
+    try {
+      const stats = await getReprocessDashboardStats();
+      return json(res, 200, {
+        success: true,
+        stats,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "stats_unavailable",
+        message: error?.message || "Falha ao consultar métricas de reprocessamento.",
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/reprocess/executions/finalize-local") {
+    try {
+      const input = await readJsonBody(req);
+      const requestId = String(input?.request_id || "").trim();
+      const status = String(input?.status || "").trim().toLowerCase();
+      const message = String(input?.message || "").trim();
+
+      if (!requestId) {
+        return json(res, 400, {
+          success: false,
+          error: "request_id_required",
+          message: "Informe request_id para finalizar execução local.",
+        });
+      }
+
+      const result = await finalizeExecutionByRequestId({
+        requestId,
+        status,
+        message,
+      });
+
+      return json(res, 200, {
+        success: true,
+        result,
+      });
+    } catch (error) {
+      return json(res, 500, {
+        success: false,
+        error: "finalize_local_failed",
+        message: error?.message || "Falha ao finalizar execução local no banco.",
+      });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/reprocess") {
     try {
       const input = await readJsonBody(req);
@@ -1498,7 +1575,7 @@ export async function requestHandler(req, res) {
   return json(res, 404, {
     error: "not_found",
       message:
-      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/health, GET /api/auth/audit, GET /api/auth/session, POST /api/auth/login, POST /api/auth/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
+      "Use GET /, GET /login, GET /reprocessador, GET /ajuda, GET /configuracoes, GET /empresas, GET /health, GET /api/auth/health, GET /api/auth/audit, GET /api/auth/session, POST /api/auth/login, POST /api/auth/logout, GET /api/config/empresas, PUT /api/config/empresas, GET /api/reprocess/clients, GET /api/reprocess/supabase/tables, GET /api/reprocess/supabase/pause-mappings, GET /api/reprocess/stats, POST /api/reprocess/executions/finalize-local, POST /api/reprocess/preview, POST /api/reprocess/execute, POST /api/reprocess/test-connection, POST /api/reprocess/pause-status, POST /api/reprocess/pause-remove, POST /api/reprocess/chatwoot/messages, GET /api/reprocess/chatwoot/media, POST /api/reprocess/n8n/error-callback, GET /api/reprocess/n8n/errors/latest, POST /api/reprocess/n8n/status-callback, GET /api/reprocess/n8n/status/latest, GET /api/reprocess/n8n/execution/latest, GET /api/reprocess/n8n/events, POST /conversation-context ou POST /reprocess",
   });
 }
 
