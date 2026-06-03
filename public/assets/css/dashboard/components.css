@@ -250,6 +250,66 @@
   text-align:center;
 }
 
+.history-reconcile-banner{
+  margin:0 0 10px;
+  padding:12px 14px;
+  border-radius:var(--radius-md);
+  border:1px solid color-mix(in oklch, var(--success) 28%, var(--border));
+  background:color-mix(in oklch, var(--success-soft) 58%, var(--surface));
+  color:var(--fg);
+  display:flex;
+  align-items:flex-start;
+  gap:12px;
+  box-shadow:0 8px 20px rgba(0,0,0,.04);
+  animation:fadeInUp .28s ease both;
+}
+.history-reconcile-banner.is-warning{
+  border-color:color-mix(in oklch, var(--warning) 30%, var(--border));
+  background:color-mix(in oklch, var(--warning-soft) 60%, var(--surface));
+}
+.history-reconcile-banner.is-error{
+  border-color:color-mix(in oklch, var(--error) 30%, var(--border));
+  background:color-mix(in oklch, var(--error-soft) 60%, var(--surface));
+}
+.history-reconcile-banner-icon{
+  width:28px;
+  height:28px;
+  border-radius:999px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+  background:var(--success);
+  color:var(--surface);
+  font-size:.8rem;
+  font-weight:700;
+  box-shadow:0 0 0 4px color-mix(in oklch, var(--success) 18%, transparent);
+}
+.history-reconcile-banner.is-warning .history-reconcile-banner-icon{
+  background:var(--warning);
+  box-shadow:0 0 0 4px color-mix(in oklch, var(--warning) 18%, transparent);
+}
+.history-reconcile-banner.is-error .history-reconcile-banner-icon{
+  background:var(--error);
+  box-shadow:0 0 0 4px color-mix(in oklch, var(--error) 18%, transparent);
+}
+.history-reconcile-banner-copy{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-width:0;
+}
+.history-reconcile-banner-copy strong{
+  font-size:.76rem;
+  font-weight:700;
+  color:var(--fg);
+}
+.history-reconcile-banner-copy span{
+  font-size:.74rem;
+  line-height:1.45;
+  color:var(--fg-secondary);
+}
+
 .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);transition:border-color var(--transition)}
 .table-wrap:hover{border-color:var(--border-strong)}
 table.history{width:100%;border-collapse:collapse;font-size:.8rem}

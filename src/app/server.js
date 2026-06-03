@@ -54,6 +54,9 @@ import {
   scheduleExecutionReconciliation,
 } from "../services/n8nExecutionTracker.js";
 import {
+  reconcileOpenExecutionsWithChatwoot,
+} from "../services/executionChatwootReconciler.js";
+import {
   readCompaniesConfig,
   writeCompaniesConfig,
 } from "../services/companyConfigStore.js";
@@ -1487,6 +1490,14 @@ export async function requestHandler(req, res) {
       }
     }
 
+    if (requestId || client || conversationId) {
+      try {
+        await reconcileOpenExecutionsWithChatwoot(config, 8);
+      } catch {
+        // Reconciliação do Chatwoot é complementar; não deve bloquear a resposta principal.
+      }
+    }
+
     return json(res, 200, {
       success: true,
       found: Boolean(event),
@@ -1499,6 +1510,15 @@ export async function requestHandler(req, res) {
     const requestId = requestUrl.searchParams.get("request_id") || "";
     const conversationId = requestUrl.searchParams.get("conversation_id") || "";
     const limit = Number(requestUrl.searchParams.get("limit") || 20);
+
+    if (requestId || client || conversationId) {
+      try {
+        await reconcileOpenExecutionsWithChatwoot(config, 8);
+      } catch {
+        // Same reason: keep timeline resilient even if the reconcilier fails.
+      }
+    }
+
     const events = await listRecentN8nEvents({
       client,
       requestId,
@@ -1515,6 +1535,7 @@ export async function requestHandler(req, res) {
 
   if (req.method === "GET" && pathname === "/api/reprocess/stats") {
     try {
+      await reconcileOpenExecutionsWithChatwoot(config, 8);
       const stats = await getReprocessDashboardStats();
       return json(res, 200, {
         success: true,
@@ -1531,11 +1552,13 @@ export async function requestHandler(req, res) {
 
   if (req.method === "GET" && pathname === "/api/reprocess/executions") {
     try {
+      const reconcile = await reconcileOpenExecutionsWithChatwoot(config, 8);
       const page = Number(requestUrl.searchParams.get("page") || 1);
       const perPage = Number(requestUrl.searchParams.get("per_page") || 20);
       const result = await listReprocessExecutions({ page, perPage });
       return json(res, 200, {
         success: true,
+        reconcile,
         ...result,
       });
     } catch (error) {
@@ -1549,6 +1572,7 @@ export async function requestHandler(req, res) {
 
   if (req.method === "GET" && pathname === "/api/reprocess/executions/pending") {
     try {
+      await reconcileOpenExecutionsWithChatwoot(config, 8);
       const limit = Number(requestUrl.searchParams.get("limit") || 100);
       const items = await listPendingExecutions({ limit });
       return json(res, 200, {

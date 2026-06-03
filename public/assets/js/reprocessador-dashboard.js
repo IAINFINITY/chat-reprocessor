@@ -67,6 +67,8 @@ var state = {
   dashboardStats: null,
   pendingExecutions: [],
   requestFlights: {},
+  lastReconciliationNoticeId: "",
+  historyReconcileTimer: null,
 };
 
 var el = {};
@@ -134,6 +136,7 @@ var el = {};
   "chatReprocessList",
   "historyBody",
   "historyPagination",
+  "historyReconcileBanner",
   "refreshHistory",
   "queuePendingCount",
   "queueDedupeBtn",
@@ -1243,6 +1246,111 @@ function getHistoryStatusByRequestId(requestId) {
     return safeText(entry && entry.requestId, "") === needle;
   });
   return item ? normalizeHistoryStatus(item.status) : "";
+}
+
+function settleActiveRunFromHistory(note) {
+  if (!state.activeRunRequestId) {
+    return false;
+  }
+
+  var status = getHistoryStatusByRequestId(state.activeRunRequestId);
+  if (!isHistoryTerminalStatus(status)) {
+    return false;
+  }
+
+  if (status === "success") {
+    setPipelineStep(4);
+    setStatus(safeText(note, "Execução finalizada automaticamente com retorno confirmado no Chatwoot."), false);
+  }
+
+  if (status === "error") {
+    setPipelineStep(4);
+    setStatus(safeText(note, "Execução finalizada automaticamente com erro confirmado no banco."), true);
+  }
+
+  if (status === "paused") {
+    setPipelineStep(4);
+    setStatus(safeText(note, "Execução encerrada automaticamente por pausa confirmada no banco."), true);
+  }
+
+  state.activeRunRequestId = "";
+  state.activeRunStartedAt = 0;
+  state.activeRunClientKey = "";
+  stopMonitor();
+  stopChatMonitor();
+  return true;
+}
+
+function clearHistoryReconciliationBanner() {
+  if (state.historyReconcileTimer) {
+    clearTimeout(state.historyReconcileTimer);
+    state.historyReconcileTimer = null;
+  }
+  if (!hasEl("historyReconcileBanner")) {
+    return;
+  }
+  el.historyReconcileBanner.hidden = true;
+  el.historyReconcileBanner.textContent = "";
+  el.historyReconcileBanner.className = "history-reconcile-banner";
+}
+
+function showHistoryReconciliationBanner(message, kind) {
+  if (!hasEl("historyReconcileBanner")) {
+    return;
+  }
+
+  if (state.historyReconcileTimer) {
+    clearTimeout(state.historyReconcileTimer);
+    state.historyReconcileTimer = null;
+  }
+
+  var tone = kind === "error" ? "is-error" : kind === "warning" ? "is-warning" : "is-success";
+  el.historyReconcileBanner.hidden = false;
+  el.historyReconcileBanner.className = "history-reconcile-banner " + tone;
+  el.historyReconcileBanner.innerHTML =
+    '<div class="history-reconcile-banner-icon" aria-hidden="true">✓</div>' +
+    '<div class="history-reconcile-banner-copy">' +
+    '<strong>Reconciliação Chatwoot</strong>' +
+    '<span>' + escapeHtml(safeText(message, "Execução encerrada automaticamente após confirmação no Chatwoot.")) + "</span>" +
+    "</div>";
+
+  state.historyReconcileTimer = setTimeout(function () {
+    clearHistoryReconciliationBanner();
+  }, 15000);
+}
+
+function announceChatwootReconciliation(reconcile) {
+  var info = reconcile && typeof reconcile === "object" ? reconcile : null;
+  if (!info || Number(info.updated || 0) <= 0) {
+    return false;
+  }
+
+  var reconcileId = safeText(info.reconcile_id, "");
+  if (reconcileId && state.lastReconciliationNoticeId === reconcileId) {
+    return false;
+  }
+  state.lastReconciliationNoticeId = reconcileId || state.lastReconciliationNoticeId;
+
+  var updatedCount = Math.max(0, Number(info.updated || 0));
+  var requestIds = Array.isArray(info.updated_request_ids) ? info.updated_request_ids.filter(Boolean) : [];
+  var requestLabel = requestIds.length > 0 ? requestIds.slice(0, 3).join(", ") : "n/a";
+  var message =
+    updatedCount === 1
+      ? "1 execução foi encerrada automaticamente após confirmação no Chatwoot."
+      : String(updatedCount) + " execuções foram encerradas automaticamente após confirmação no Chatwoot.";
+
+  showHistoryReconciliationBanner(message, "success");
+  pushActivity("success", "Execução reconciliada", message + " Req: " + requestLabel + ".");
+  showToast(message, "success");
+  if (hasEl("chatPreviewStatus")) {
+    setChatPreviewStatus(message);
+  }
+
+  if (settleActiveRunFromHistory("Execução encerrada automaticamente com retorno confirmado no Chatwoot.")) {
+    fireConfetti(10);
+  }
+
+  return true;
 }
 
 function hasActiveRunInProgress() {
@@ -2850,6 +2958,12 @@ async function fetchExecutionHistory(options) {
       state.historyTotalPages = Math.max(1, Number(data.total_pages || 1));
       state.historyTotal = Math.max(0, Number(data.total || 0));
       renderHistory();
+      if (data.reconcile && Number(data.reconcile.updated || 0) > 0) {
+        announceChatwootReconciliation(data.reconcile);
+      } else if (!hasSuccessEvidenceForActiveRun()) {
+        clearHistoryReconciliationBanner();
+        settleActiveRunFromHistory();
+      }
       return data;
     } catch {
       if (!silent) {
