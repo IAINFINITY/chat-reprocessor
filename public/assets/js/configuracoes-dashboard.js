@@ -7,6 +7,7 @@ var state = {
   filteredTables: [],
   activeCompanyIndex: -1,
   confirmResolver: null,
+  requestFlights: {},
 };
 
 var el = {};
@@ -49,6 +50,24 @@ function onEl(name, eventName, handler) {
 function safeText(value, fallback) {
   var text = String(value == null ? "" : value).trim();
   return text || fallback;
+}
+
+function runSingleFlight(key, runner) {
+  var flights = state.requestFlights || (state.requestFlights = {});
+  if (flights[key]) {
+    return flights[key];
+  }
+
+  var promise = Promise.resolve()
+    .then(runner)
+    .finally(function () {
+      if (flights[key] === promise) {
+        delete flights[key];
+      }
+    });
+
+  flights[key] = promise;
+  return promise;
 }
 
 function setStatus(message, isError) {
@@ -252,7 +271,8 @@ async function loadCompanies() {
   if (!hasEl("companiesContainer")) {
     return;
   }
-  try {
+  return runSingleFlight("companies", async function () {
+    try {
     var response = await fetch("/api/config/empresas");
     var data = await readJsonSafe(response);
     if (!response.ok || !data || !data.success) {
@@ -269,6 +289,7 @@ async function loadCompanies() {
     setStatus("Erro ao carregar empresas: " + safeText(error && error.message, "erro"), true);
     setSaveFeedback("", "");
   }
+  });
 }
 
 function collectCompaniesFromUi() {
@@ -333,7 +354,8 @@ async function loadSupabaseTables() {
   }
   var schema = safeText(el.schemaInput.value, "public");
 
-  try {
+  return runSingleFlight("supabase_tables:" + schema, async function () {
+    try {
     var response = await fetch(
       "/api/reprocess/supabase/tables?schema=" +
         encodeURIComponent(schema) +
@@ -349,6 +371,7 @@ async function loadSupabaseTables() {
   } catch (error) {
     setStatus("Erro ao carregar tabelas: " + safeText(error && error.message, "erro"), true);
   }
+  });
 }
 
 function applyTableFilter() {

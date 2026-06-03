@@ -1,6 +1,9 @@
 import { prisma } from "../clients/prismaClient.js";
 
 const DEFAULT_SUPABASE_TABLE_PREFIX = "REPROCESSAMENTO - ";
+const COMPANIES_CACHE_TTL_MS = Math.max(3_000, Number(process.env.COMPANIES_CACHE_TTL_MS || 10_000));
+const companiesCache = new Map();
+const companiesInflight = new Map();
 
 function normalizeName(value) {
   return String(value || "")
@@ -55,6 +58,77 @@ function hasManagedPrefix(tableName, prefix) {
 function shouldEnforceManagedPrefix() {
   const raw = String(process.env.REPROCESS_ENFORCE_MANAGED_PREFIX || "false").trim().toLowerCase();
   return raw === "true" || raw === "1" || raw === "yes" || raw === "sim";
+}
+
+function cloneValue(value) {
+  return typeof structuredClone === "function"
+    ? structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
+}
+
+function cacheKey(includeInactive) {
+  return includeInactive ? "with_inactive" : "active_only";
+}
+
+function getCachedCompanies(includeInactive) {
+  const entry = companiesCache.get(cacheKey(includeInactive));
+  if (!entry) {
+    return null;
+  }
+
+  if (Date.now() > entry.expiresAt) {
+    companiesCache.delete(cacheKey(includeInactive));
+    return null;
+  }
+
+  return cloneValue(entry.value);
+}
+
+function setCachedCompanies(includeInactive, value) {
+  companiesCache.set(cacheKey(includeInactive), {
+    value: cloneValue(value),
+    expiresAt: Date.now() + COMPANIES_CACHE_TTL_MS,
+  });
+}
+
+function invalidateCompaniesCache() {
+  companiesCache.clear();
+}
+
+function isPrismaPoolTimeout(error) {
+  const code = String(error?.code || "").trim();
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    code === "P2024" ||
+    message.includes("timed out fetching a new connection from the connection pool") ||
+    message.includes("connection pool timeout") ||
+    message.includes("connection limit")
+  );
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withPrismaRetry(operation, label) {
+  const attempts = 2;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isPrismaPoolTimeout(error) || attempt === attempts) {
+        throw error;
+      }
+
+      const waitMs = attempt === 1 ? 150 : 300;
+      await delay(waitMs);
+    }
+  }
+
+  throw new Error(`${label || "prisma_operation"} failed: ${String(lastError?.message || "unknown error")}`);
 }
 
 function validateCompaniesRows(rows) {
@@ -153,43 +227,73 @@ function isTransactionStartTimeout(error) {
 }
 
 async function writeCompaniesWithoutLongTransaction(empresas) {
-  await prisma.reprocessCompany.updateMany({
-    data: { ativo: false },
-  });
+  await withPrismaRetry(
+    () =>
+      prisma.reprocessCompany.updateMany({
+        data: { ativo: false },
+      }),
+    "companies_deactivate",
+  );
 
   for (const empresa of empresas) {
-    await prisma.reprocessCompany.upsert({
-      where: { nomeNormalizado: empresa.nome_normalizado },
-      create: {
-        nome: empresa.nome,
-        nomeNormalizado: empresa.nome_normalizado,
-        urlWebhook: empresa.url_webhook,
-        tabela: empresa.tabela,
-        chatwootAccountIds: empresa.chatwoot_account_ids,
-        ativo: true,
-      },
-      update: {
-        nome: empresa.nome,
-        urlWebhook: empresa.url_webhook,
-        tabela: empresa.tabela,
-        chatwootAccountIds: empresa.chatwoot_account_ids,
-        ativo: true,
-      },
-    });
+    await withPrismaRetry(
+      () =>
+        prisma.reprocessCompany.upsert({
+          where: { nomeNormalizado: empresa.nome_normalizado },
+          create: {
+            nome: empresa.nome,
+            nomeNormalizado: empresa.nome_normalizado,
+            urlWebhook: empresa.url_webhook,
+            tabela: empresa.tabela,
+            chatwootAccountIds: empresa.chatwoot_account_ids,
+            ativo: true,
+          },
+          update: {
+            nome: empresa.nome,
+            urlWebhook: empresa.url_webhook,
+            tabela: empresa.tabela,
+            chatwootAccountIds: empresa.chatwoot_account_ids,
+            ativo: true,
+          },
+        }),
+      "companies_upsert",
+    );
   }
 }
 
 export async function readCompaniesConfig({ includeInactive = false } = {}) {
-  const where = includeInactive ? {} : { ativo: true };
-  const companies = await prisma.reprocessCompany.findMany({
-    where,
-    orderBy: { nomeNormalizado: "asc" },
-  });
+  const cached = getCachedCompanies(includeInactive);
+  if (cached) {
+    return cached;
+  }
 
-  return {
+  const inflightKey = cacheKey(includeInactive);
+  if (companiesInflight.has(inflightKey)) {
+    return cloneValue(await companiesInflight.get(inflightKey));
+  }
+
+  const where = includeInactive ? {} : { ativo: true };
+  const promise = withPrismaRetry(
+    () =>
+      prisma.reprocessCompany.findMany({
+        where,
+        orderBy: { nomeNormalizado: "asc" },
+      }),
+    "companies_read",
+  ).then((companies) => ({
     storage: "database",
     empresas: companies.map(mapCompanyRecord),
-  };
+  }));
+
+  companiesInflight.set(inflightKey, promise);
+
+  try {
+    const result = await promise;
+    setCachedCompanies(includeInactive, result);
+    return cloneValue(result);
+  } finally {
+    companiesInflight.delete(inflightKey);
+  }
 }
 
 export async function writeCompaniesConfig(input = {}) {
@@ -233,6 +337,8 @@ export async function writeCompaniesConfig(input = {}) {
     }
     await writeCompaniesWithoutLongTransaction(empresas);
   }
+
+  invalidateCompaniesCache();
 
   return {
     storage: "database",

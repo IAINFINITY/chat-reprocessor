@@ -66,6 +66,7 @@ var state = {
   previewProgressValue: 0,
   dashboardStats: null,
   pendingExecutions: [],
+  requestFlights: {},
 };
 
 var el = {};
@@ -319,6 +320,24 @@ function deepClone(value) {
   } catch {
     return value;
   }
+}
+
+function runSingleFlight(key, runner) {
+  var flights = state.requestFlights || (state.requestFlights = {});
+  if (flights[key]) {
+    return flights[key];
+  }
+
+  var promise = Promise.resolve()
+    .then(runner)
+    .finally(function () {
+      if (flights[key] === promise) {
+        delete flights[key];
+      }
+    });
+
+  flights[key] = promise;
+  return promise;
 }
 
 function getPreviewItem(payload) {
@@ -1777,48 +1796,52 @@ async function fetchN8nEvents(options) {
   var limit = Number(opts.limit || 30);
   var client = opts.client || getN8nTimelineClient();
   var requestId = safeText(opts.requestId || getActiveTimelineRequestFilter(), "");
-  var params = new URLSearchParams();
-  params.set("limit", String(Math.max(5, Math.min(limit, 100))));
-  if (client) {
-    params.set("client", client);
-  }
-  if (requestId) {
-    params.set("request_id", requestId);
-  }
+  var flightKey = "n8n:" + String(Math.max(5, Math.min(limit, 100))) + ":" + String(client || "") + ":" + String(requestId || "");
 
-  try {
-    var response = await fetch("/api/reprocess/n8n/events?" + params.toString());
-    var data = await readJsonSafe(response);
+  return runSingleFlight(flightKey, async function () {
+    var params = new URLSearchParams();
+    params.set("limit", String(Math.max(5, Math.min(limit, 100))));
+    if (client) {
+      params.set("client", client);
+    }
+    if (requestId) {
+      params.set("request_id", requestId);
+    }
 
-    if (!response.ok || !data || !data.success) {
+    try {
+      var response = await fetch("/api/reprocess/n8n/events?" + params.toString());
+      var data = await readJsonSafe(response);
+
+      if (!response.ok || !data || !data.success) {
+        if (!silent) {
+          setStatus("Falha ao atualizar timeline n8n.", true);
+        }
+        return;
+      }
+
+      var incoming = Array.isArray(data.events) ? data.events : [];
+      var localEvents = (Array.isArray(state.localN8nEvents) ? state.localN8nEvents : []).filter(function (event) {
+        if (!requestId) {
+          return true;
+        }
+        return safeText(event && event.request_id, "") === requestId;
+      });
+      var combined = dedupeTimelineEventsPreservingOrder(localEvents.concat(incoming));
+      var fingerprint = buildN8nEventsFingerprint(combined);
+      if (fingerprint === state.n8nEventsFingerprint) {
+        return;
+      }
+
+      state.n8nEvents = combined;
+      state.n8nEventsFingerprint = fingerprint;
+      renderN8nEvents();
+      reconcileActiveRunFromTimeline();
+    } catch {
       if (!silent) {
-        setStatus("Falha ao atualizar timeline n8n.", true);
+        setStatus("Falha de rede ao atualizar timeline n8n.", true);
       }
-      return;
     }
-
-    var incoming = Array.isArray(data.events) ? data.events : [];
-    var localEvents = (Array.isArray(state.localN8nEvents) ? state.localN8nEvents : []).filter(function (event) {
-      if (!requestId) {
-        return true;
-      }
-      return safeText(event && event.request_id, "") === requestId;
-    });
-    var combined = dedupeTimelineEventsPreservingOrder(localEvents.concat(incoming));
-    var fingerprint = buildN8nEventsFingerprint(combined);
-    if (fingerprint === state.n8nEventsFingerprint) {
-      return;
-    }
-
-    state.n8nEvents = combined;
-    state.n8nEventsFingerprint = fingerprint;
-    renderN8nEvents();
-    reconcileActiveRunFromTimeline();
-  } catch {
-    if (!silent) {
-      setStatus("Falha de rede ao atualizar timeline n8n.", true);
-    }
-  }
+  });
 }
 
 function startN8nEventsPolling() {
@@ -2361,50 +2384,52 @@ async function readJsonSafe(response) {
 }
 
 async function loadClients() {
-  var attempts = 2;
-  var lastError = null;
+  return runSingleFlight("clients", async function () {
+    var attempts = 2;
+    var lastError = null;
 
-  for (var attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      var response = await fetch("/api/reprocess/clients");
-      var data = await readJsonSafe(response);
+    for (var attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        var response = await fetch("/api/reprocess/clients");
+        var data = await readJsonSafe(response);
 
-      if (!response.ok || !data || !data.success) {
-        throw new Error((data && data.message) || "Falha ao carregar clientes.");
-      }
+        if (!response.ok || !data || !data.success) {
+          throw new Error((data && data.message) || "Falha ao carregar clientes.");
+        }
 
-      state.clients = Array.isArray(data.clients) ? data.clients : [];
-      if (!hasEl("clientSelect")) {
+        state.clients = Array.isArray(data.clients) ? data.clients : [];
+        if (!hasEl("clientSelect")) {
+          return;
+        }
+
+        el.clientSelect.innerHTML = '<option value="">Detectar automaticamente</option>';
+
+        state.clients.forEach(function (client) {
+          var option = document.createElement("option");
+          option.value = client.key;
+          option.textContent = client.name + (client.key ? " (" + formatClientKeyForDisplay(client.key) + ")" : "");
+          el.clientSelect.appendChild(option);
+        });
+
+        updateDashboardStats();
+        setStatus("Pronto. Cole o link da conversa.", false);
+        if (hasEl("previewBtn")) {
+          el.previewBtn.disabled = false;
+        }
         return;
-      }
-
-      el.clientSelect.innerHTML = '<option value="">Detectar automaticamente</option>';
-
-      state.clients.forEach(function (client) {
-        var option = document.createElement("option");
-        option.value = client.key;
-        option.textContent = client.name + (client.key ? " (" + formatClientKeyForDisplay(client.key) + ")" : "");
-        el.clientSelect.appendChild(option);
-      });
-
-      updateDashboardStats();
-      setStatus("Pronto. Cole o link da conversa.", false);
-      if (hasEl("previewBtn")) {
-        el.previewBtn.disabled = false;
-      }
-      return;
-    } catch (error) {
-      lastError = error;
-      if (attempt < attempts) {
-        await wait(500);
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) {
+          await wait(500);
+        }
       }
     }
-  }
 
-  setStatus("Erro ao carregar clientes: " + safeText(lastError && lastError.message, "erro"), true);
-  if (hasEl("previewBtn")) {
-    el.previewBtn.disabled = true;
-  }
+    setStatus("Erro ao carregar clientes: " + safeText(lastError && lastError.message, "erro"), true);
+    if (hasEl("previewBtn")) {
+      el.previewBtn.disabled = true;
+    }
+  });
 }
 
 function maybeReloadClientsIfMissing() {
@@ -2803,84 +2828,93 @@ async function fetchExecutionHistory(options) {
   var silent = opts.silent === true;
   var page = Math.max(1, Number(opts.page || state.historyPage || 1));
   var perPage = Math.max(1, Math.min(Number(opts.perPage || 20), 100));
+  var flightKey = "history:" + String(page) + ":" + String(perPage);
 
-  try {
-    var params = new URLSearchParams();
-    params.set("page", String(page));
-    params.set("per_page", String(perPage));
-    var response = await fetch("/api/reprocess/executions?" + params.toString());
-    var data = await readJsonSafe(response);
-    if (!response.ok || !data || !data.success) {
+  return runSingleFlight(flightKey, async function () {
+    try {
+      var params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("per_page", String(perPage));
+      var response = await fetch("/api/reprocess/executions?" + params.toString());
+      var data = await readJsonSafe(response);
+      if (!response.ok || !data || !data.success) {
+        if (!silent) {
+          setStatus("Falha ao carregar histórico do banco.", true);
+        }
+        return null;
+      }
+
+      var items = Array.isArray(data.items) ? data.items : [];
+      state.history = items.map(toHistoryViewItem);
+      state.historyPage = Math.max(1, Number(data.page || page));
+      state.historyTotalPages = Math.max(1, Number(data.total_pages || 1));
+      state.historyTotal = Math.max(0, Number(data.total || 0));
+      renderHistory();
+      return data;
+    } catch {
       if (!silent) {
-        setStatus("Falha ao carregar histórico do banco.", true);
+        setStatus("Erro de rede ao carregar histórico do banco.", true);
       }
       return null;
     }
-
-    var items = Array.isArray(data.items) ? data.items : [];
-    state.history = items.map(toHistoryViewItem);
-    state.historyPage = Math.max(1, Number(data.page || page));
-    state.historyTotalPages = Math.max(1, Number(data.total_pages || 1));
-    state.historyTotal = Math.max(0, Number(data.total || 0));
-    renderHistory();
-    return data;
-  } catch {
-    if (!silent) {
-      setStatus("Erro de rede ao carregar histórico do banco.", true);
-    }
-    return null;
-  }
+  });
 }
 
 async function fetchPendingQueueFromDatabase(options) {
   var opts = options || {};
   var silent = opts.silent === true;
   var limit = Math.max(1, Math.min(Number(opts.limit || 150), 300));
+  var flightKey = "pending:" + String(limit);
 
-  try {
-    var response = await fetch("/api/reprocess/executions/pending?limit=" + String(limit));
-    var data = await readJsonSafe(response);
-    if (!response.ok || !data || !data.success) {
+  return runSingleFlight(flightKey, async function () {
+    try {
+      var response = await fetch("/api/reprocess/executions/pending?limit=" + String(limit));
+      var data = await readJsonSafe(response);
+      if (!response.ok || !data || !data.success) {
+        if (!silent) {
+          setStatus("Falha ao carregar fila pendente do banco.", true);
+        }
+        return null;
+      }
+      state.pendingExecutions = Array.isArray(data.items) ? data.items : [];
+      renderQueueControl();
+      return data;
+    } catch {
       if (!silent) {
-        setStatus("Falha ao carregar fila pendente do banco.", true);
+        setStatus("Erro de rede ao carregar fila pendente do banco.", true);
       }
       return null;
     }
-    state.pendingExecutions = Array.isArray(data.items) ? data.items : [];
-    renderQueueControl();
-    return data;
-  } catch {
-    if (!silent) {
-      setStatus("Erro de rede ao carregar fila pendente do banco.", true);
-    }
-    return null;
-  }
+  });
 }
 
 async function fetchDashboardStats(options) {
   var opts = options || {};
   var silent = opts.silent === true;
+  var flightKey = "stats:dashboard";
 
-  try {
-    var response = await fetch("/api/reprocess/stats");
-    var data = await readJsonSafe(response);
+  return runSingleFlight(flightKey, async function () {
+    try {
+      var response = await fetch("/api/reprocess/stats");
+      var data = await readJsonSafe(response);
 
-    if (!response.ok || !data || !data.success || !data.stats) {
+      if (!response.ok || !data || !data.success || !data.stats) {
+        if (!silent) {
+          setStatus("Falha ao carregar métricas do banco.", true);
+        }
+        return null;
+      }
+
+      state.dashboardStats = data.stats;
+      updateDashboardStats();
+      return data.stats;
+    } catch {
       if (!silent) {
-        setStatus("Falha ao carregar métricas do banco.", true);
+        setStatus("Erro de rede ao carregar métricas do banco.", true);
       }
       return null;
     }
-
-    state.dashboardStats = data.stats;
-    updateDashboardStats();
-    return data.stats;
-  } catch {
-    if (!silent) {
-      setStatus("Erro de rede ao carregar métricas do banco.", true);
-    }
-    return null;
-  }
+  });
 }
 
 function updateDashboardStats() {
@@ -2939,6 +2973,12 @@ async function generatePreview() {
 
   if (!url) {
     setStatus("Informe o link da conversa.", true);
+    return;
+  }
+
+  if (hasActiveRunInProgress() && safeText(state.currentConversationUrl, "") === url) {
+    setStatus("Já existe um reprocessamento em andamento para esta conversa. Aguarde finalizar antes de gerar outro preview.", true);
+    showToast("Preview bloqueado para a mesma conversa em execução.", "error");
     return;
   }
 
